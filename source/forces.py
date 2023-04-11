@@ -39,7 +39,6 @@ def forces( pos, vel, sc ):
     '''
     
     # Retrieve all parameters from the spacecraft.
-    GM = sc.GM
     Cd = sc.Cd
     
     # Define all constants
