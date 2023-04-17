@@ -47,6 +47,14 @@ class Formation():
             self.update_ROE( sC, sD )
             self.update_RTN( sC, sD )
             
+            # Relative states in RTN frame
+            self.pR = 0.0
+            self.pT = 0.0
+            self.pN = 0.0
+            self.vR = 0.0
+            self.vT = 0.0
+            self.vN = 0.0
+            
         except AttributeError:
             print("AttributeError: Check if constructor has 02x Spacecraft()?")
         except TypeError:
@@ -77,4 +85,9 @@ class Formation():
         pD  = np.array([ self.sD.px, self.sD.py, self.sD.pz ])
         self.get_hill_dcm() # Updates self.hill_dcm
         self.RTN = self.hill_dcm @ ( pD - pC )
+        
+        
+    # # Propagate full non-linear equations of motion.
+    # def propagate_perturbed():
+    #     # States: []
     

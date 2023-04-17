@@ -148,12 +148,12 @@ class Spacecraft():
         # __setattr__ for 'forces' attribute. Dictionary of forces toggled.
         if key == 'forces':
             if value is None:
-                self.__dict__[key] = {'Earth Twobody':True,
-                                      'Earth Oblate J2':False,
-                                      'Earth Atmos Drag':False,
-                                      'Earth Solar Rad':False,
-                                      'Moon Third-Body':False,
-                                      'Sun Third-Body':False}
+                self.__dict__[key] = {'twobody':True,
+                                      'j2':False,
+                                      'drag':False,
+                                      'srp':False,
+                                      'moon':False,
+                                      'sun':False}
             else:
                 if type(value) is dict:
                     print('Toggling the current forces:')
