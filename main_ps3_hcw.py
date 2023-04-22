@@ -2,11 +2,9 @@
 """
 Created on Fri Apr 21 12:55:40 2023
 
-@author: sam low and katherine
+By: Sam Low and Katherine Cao
 """
 
-# This code starts with Q1(d) and Q2(c): propagation of relative orbits
-# using HCW and YA state transition matrices.
 import numpy as np
 import matplotlib.pyplot as plt
 from math import sin, cos, pi
@@ -79,19 +77,25 @@ def stm_hcw(sc, t):
 ##############################################################################
 
 from main_ps2 import rv_eci_to_rtn, relative_rk4
+from main_ps3_roe import compute_roe
 
 # Now test and see, based on initial conditions in Table 2 of PS3, if HCW
 # approximates motion well, with the non-linear FDERM propagation.
-sc1_elements = [6928.137, 0.000001, 97.5976, 0.0, 250.6620, 0.00827]
-sc2_elements = [6929.137, 0.000001, 97.5976, 0.0, 250.6703, 0.00413]
+sc1_elements = [7928.137, 0.00001, 97.5976, 0.0, 250.6620, 0.00827]
+sc2_elements = [7928.137, 0.00001, 97.5976, 0.0, 250.6703, 0.00413]
+sc3_elements = [7928.137, 0.00001, 97.5976, 0.0, 250.6620, 0.00000]
 
 # Create the spacecraft objects.
 sc1 = spacecraft.Spacecraft( elements = sc1_elements )
 sc2 = spacecraft.Spacecraft( elements = sc2_elements )
-sc2 = spacecraft.Spacecraft( elements = sc2_elements )
+sc3 = spacecraft.Spacecraft( elements = sc3_elements )
+
+# Print out the QSN ROEs for SC2
+# compute_roe(sc1, sc2)
+# compute_roe(sc1, sc3)
 
 # Start the simulation here.
-timeNow, duration, timestep = 0.0, 86400.0, 30.0 # Seconds
+timeNow, duration, timestep = 0.0, 30.0, 30.0 # Seconds
 samples = int(duration / timestep)
 k = 0  # Sample count
 
@@ -127,7 +131,7 @@ while timeNow < duration:
                                                       rv_rtn_true[0:3],
                                                       rv_rtn_true[3:6], sc1.a)
     
-    print(np.linalg.norm(rv_rtn_true - rv_rtn_hcw))
+    # print(np.linalg.norm(rv_rtn_true - rv_rtn_hcw))
     
     # Finally, the chief itself needs to be propagated (in absolute motion)
     sc1.propagate_perturbed(timestep, timestep)
@@ -142,7 +146,6 @@ while timeNow < duration:
 plt.close('all')
 timeAxis = np.linspace(0, duration, samples)
 
-
 # Plot position errors between HCW and truth
 plt.figure(1)
 
@@ -151,19 +154,19 @@ plt.title('`HCW` minus `Truth` position error in RTN [km]')
 plt.plot(timeAxis, rtn_states_true[:, 0] - rtn_states_hcw[:, 0])
 plt.grid()
 plt.xlabel('Simulation time [sec]')
-plt.ylabel('R component [km]')
+plt.ylabel('R [km]')
 
 plt.subplot(3, 1, 2)
 plt.plot(timeAxis, rtn_states_true[:, 1] - rtn_states_hcw[:, 1])
 plt.grid()
 plt.xlabel('Simulation time [sec]')
-plt.ylabel('T component [km]')
+plt.ylabel('T [km]')
 
 plt.subplot(3, 1, 3)
 plt.plot(timeAxis, rtn_states_true[:, 2] - rtn_states_hcw[:, 2])
 plt.grid()
 plt.xlabel('Simulation time [sec]')
-plt.ylabel('N component [km]')
+plt.ylabel('N [km]')
 
 plt.show()
 
@@ -178,18 +181,92 @@ plt.title('`HCW` minus `Truth` velocity error in RTN [km/s]')
 plt.plot(timeAxis, rtn_states_true[:, 3] - rtn_states_hcw[:, 3])
 plt.grid()
 plt.xlabel('Simulation time [sec]')
-plt.ylabel('R component [km/s]')
+plt.ylabel('R [km/s]')
 
 plt.subplot(3, 1, 2)
 plt.plot(timeAxis, rtn_states_true[:, 4] - rtn_states_hcw[:, 4])
 plt.grid()
 plt.xlabel('Simulation time [sec]')
-plt.ylabel('T component [km/s]')
+plt.ylabel('T [km/s]')
 
 plt.subplot(3, 1, 3)
 plt.plot(timeAxis, rtn_states_true[:, 5] - rtn_states_hcw[:, 5])
 plt.grid()
 plt.xlabel('Simulation time [sec]')
-plt.ylabel('N component [km/s]')
+plt.ylabel('N [km/s]')
+
+plt.show()
+
+###############################################################################
+###############################################################################
+
+# Plot RTN of truth and HCW in 3D
+fig3 = plt.figure(3).add_subplot(projection='3d')
+axisLimit = 1.0 # km
+
+# Plot HCW vs truth
+fig3.plot(rtn_states_hcw[:,1], rtn_states_hcw[:,2], rtn_states_hcw[:,0],
+          'r-', alpha = 0.35)
+fig3.plot(rtn_states_true[:,1], rtn_states_true[:,2], rtn_states_true[:,0],
+          'b:', alpha = 0.85)
+
+# Plot a vector triad to represent chief at the origin
+fig3.quiver(0,0,0,1,0,0, length = axisLimit / 5, color = 'g',
+            arrow_length_ratio = 0.3 )
+fig3.quiver(0,0,0,0,1,0, length = axisLimit / 5, color = 'g',
+            arrow_length_ratio = 0.3 )
+fig3.quiver(0,0,0,0,0,1, length = axisLimit / 5, color = 'g',
+            arrow_length_ratio = 0.3 )
+
+# Set plotting parameters
+fig3.set_title('Trajectory in RTN of HCW versus truth')
+fig3.grid()
+fig3.set_xlabel('T [km]')
+fig3.set_ylabel('N [km]')
+fig3.set_zlabel('R [km]')
+fig3.set_xlim(-axisLimit, axisLimit)
+fig3.set_ylim(-axisLimit, axisLimit)
+fig3.set_zlim(-axisLimit, axisLimit)
+fig3.legend(['HCW', 'True'])
+
+###############################################################################
+###############################################################################
+
+# Plot of relative orbit planes
+
+plt.figure(4)
+
+# TR plane
+plt.subplot(1, 3, 1)
+plt.title('TR plane plot')
+plt.plot(rtn_states_hcw[:,1], rtn_states_hcw[:,0], 'r-')
+plt.plot(rtn_states_true[:,1], rtn_states_true[:,0], 'b:')
+plt.grid()
+plt.xlabel('T component [km]')
+plt.ylabel('R component [km]')
+plt.axis('equal')
+plt.legend(['HCW', 'True'])
+
+# NR plane
+plt.subplot(1, 3, 2)
+plt.title('NR plane plot')
+plt.plot(rtn_states_hcw[:,2], rtn_states_hcw[:,0], 'r-')
+plt.plot(rtn_states_true[:,2], rtn_states_true[:,0], 'b:')
+plt.grid()
+plt.xlabel('N component [km]')
+plt.ylabel('R component [km]')
+plt.axis('equal')
+plt.legend(['HCW', 'True'])
+
+# TN plane
+plt.subplot(1, 3, 3)
+plt.title('TN plane plot')
+plt.plot(rtn_states_hcw[:,1], rtn_states_hcw[:,2], 'r-')
+plt.plot(rtn_states_true[:,1], rtn_states_true[:,2], 'b:')
+plt.grid()
+plt.xlabel('T component [km]')
+plt.ylabel('N component [km]')
+plt.axis('equal')
+plt.legend(['HCW', 'True'])
 
 plt.show()
