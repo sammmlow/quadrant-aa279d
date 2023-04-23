@@ -95,7 +95,7 @@ sc3 = spacecraft.Spacecraft( elements = sc3_elements )
 # compute_roe(sc1, sc3)
 
 # Start the simulation here.
-timeNow, duration, timestep = 0.0, 30.0, 30.0 # Seconds
+timeNow, duration, timestep = 0.0, 86400.0, 30.0 # Seconds
 samples = int(duration / timestep)
 k = 0  # Sample count
 

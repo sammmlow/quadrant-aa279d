@@ -16,49 +16,15 @@ from source import spacecraft
 ##############################################################################
 ##############################################################################
 
-# The YA STM follows the original YA paper in terms of matrix ordering.
-# Input ordering will be sorted within the YA STM propagation function.
+# Note: states are [xBar, xBarDot, yBar, yBarDot, zBar, zBarDot] in the book
+# but states are re-ordered to [xBar, yBar, zBar, xBarDot, yBarDot, zBarDot]
+# here in the simulations below (in the while loop near line 190).
+# Bar => normalized over the chief's current position norm
 
-def ya_transform(sc, rv_rtn):
+# YA STM 1. Compute this STM only after the chief S/C has propagated.
+def stm_yank_current(sc, dt):
     
-    # Constants
-    k = 1 + sc.e * cos(sc.nu)
-    p = sc.a * (1 - sc.e**2)
-    factor = k * sqrt(sc.GM / (p**3))
-    kprime = -sc.e * sin(sc.nu)
-    
-    # Compute transform
-    r = rv_rtn[0:3]
-    v = rv_rtn[3:6]
-    rt = (k/p) * r
-    vt = ((kprime * r) + (v / factor))
-    # vt = v / norm(np.array([sc.vx, sc.vy, sc.vz]))
-    return np.concatenate((rt, vt))
-
-def ya_inverse_transform(sc, rv_rtn_t):
-    
-    # Constants
-    k = 1 + sc.e * cos(sc.nu)
-    p = sc.a * (1 - sc.e**2)
-    factor = k * sqrt(sc.GM / (p**3))
-    kprime = -sc.e * sin(sc.nu)
-    
-    # Compute transform
-    rt = rv_rtn_t[0:3]
-    vt = rv_rtn_t[3:6]
-    r = (p/k) * rt
-    v = factor * (vt - kprime * r)
-    return np.concatenate((r, v))
-
-def stm_yank_propagate(sc, dt, nu0, rv_rtn):
-    
-    # Perform coordinate transform (see Eq 86 of YA paper)
-    # rv_y  = [-pN, -vN]
-    # rv_xz = [ pT, -pR, vT, -vR]
-    rv_rtn_trans = ya_transform(sc, rv_rtn)
-    rv_y = np.array([-rv_rtn_trans[2], -rv_rtn_trans[5]])
-    rv_xz = np.array([rv_rtn_trans[1], -rv_rtn_trans[0],
-                      rv_rtn_trans[4], -rv_rtn_trans[3]])
+    stm = np.zeros((6,6))
     
     # Obtain chief spacecraft angular momentum
     r_vec = np.array([sc.px, sc.py, sc.pz])
@@ -67,50 +33,157 @@ def stm_yank_propagate(sc, dt, nu0, rv_rtn):
     h_abs = np.linalg.norm(h_vec)
     
     # Constants.
-    e = sc.e
     I = dt * (sc.GM**2) / (h_abs**3)
-    k = 1 + e * cos(sc.nu)
-    c1 = k * cos(nu0)
-    s1 = k * sin(nu0)
-    c2 = k * cos(sc.nu)
-    s2 = k * sin(sc.nu)
-    cdelta = cos(sc.nu - nu0)
-    sdelta = sin(sc.nu - nu0)
-    kdelta = 1 + e * cdelta
-    cprime = -1 * (sin(sc.nu) + e * sin(2 * sc.nu))
-    sprime = cos(sc.nu) + e * cos(2 * sc.nu)
+    k = 1 + sc.e * cos(sc.nu)
+    c = k * cos(sc.nu)
+    s = k * sin(sc.nu)
+    cprime = -1 * (sin(sc.nu) + sc.e * sin(2 * sc.nu))
+    sprime = cos(sc.nu) + sc.e * cos(2 * sc.nu)
     
-    # In-plane STM1 using nu0
-    sRT1 = np.array([
-        [(1-e**2), (3*e*s1*((1/k)+(1/k**2))  ), (-e*s1*(1+(1/k))), (2-e*c1)],
-        [(0     ), (-3*s1*((1/k)+(e**2/k**2))), (s1*(1+(1/k))   ), (c1-2*e)],
-        [(0     ), (-3*((c1/k)+e)            ), (e+c1*(1+(1/k)) ), (-s1)   ],
-        [(0     ), (3*k+(e**2)-1             ), (-k**2          ), (e*s1)  ]])
+    # Row for xBar
+    stm[0,0] = s
+    stm[0,1] = c
+    stm[0,2] = 2 - (3 * sc.e * s * I)
+    stm[0,3] = 0
+    stm[0,4] = 0
+    stm[0,5] = 0
     
-    # In-plane STM2 using sc.nu
-    sRT2 = np.array([
-        [(1), (-c2*(1+(1/k))), (s2*(1+(1/k))), (3*(k**2)*I               )],
-        [(0), (s2           ), (c2          ), (2-3*e*s2*I               )],
-        [(0), (2*s2         ), (2*c2-e      ), (3*(1-2*e*s2*I)           )],
-        [(0), (sprime       ), (cprime      ), (-3*e*(sprime*I+s2/(k**2)))]])
+    # Row for xBarDot
+    stm[1,0] = sprime
+    stm[1,1] = cprime
+    stm[1,2] = -3 * sc.e * ((sprime * I) + (s / (k**2)))
+    stm[1,3] = 0
+    stm[1,4] = 0
+    stm[1,5] = 0
     
-    # Out-of-plane STM
-    sN = np.array([
-        [ cdelta, sdelta],
-        [-sdelta, cdelta]]) / kdelta
+    # Row for yBar
+    stm[2,0] = c * (1 + (1/k))
+    stm[2,1] = -s * (1 + (1/k))
+    stm[2,2] = -3 * (k**2) * I
+    stm[2,3] = 1
+    stm[2,4] = 0
+    stm[2,5] = 0
     
-    # Perform propagation.
-    rv_y_final = sN @ rv_y
-    rv_xz_final = sRT2 @ sRT1 @ rv_xz
+    # Row for yBarDot
+    stm[3,0] = -2 * s
+    stm[3,1] = sc.e - (2 * c)
+    stm[3,2] = -3 * (1 - (2 * sc.e * s * I))
+    stm[3,3] = 0
+    stm[3,4] = 0
+    stm[3,5] = 0
     
-    # Re-order the vector back into [pR, pT, pN, vR, vT, vN]
-    r_rtn_t_final = np.array([-rv_xz_final[1], rv_xz_final[0], -rv_y_final[0]])
-    v_rtn_t_final = np.array([-rv_xz_final[3], rv_xz_final[2], -rv_y_final[1]])
-    rv_rtn_t_final = np.concatenate((r_rtn_t_final, v_rtn_t_final))
+    # Row for zBar
+    stm[4,0] = 0
+    stm[4,1] = 0
+    stm[4,2] = 0
+    stm[4,3] = 0
+    stm[4,4] = cos(sc.nu)
+    stm[4,5] = sin(sc.nu)
     
-    # Inverse coordinate transform
-    rv_rtn_final = ya_inverse_transform(sc, rv_rtn_t_final)
-    return rv_rtn_final
+    # Row for zBarDot
+    stm[5,0] = 0
+    stm[5,1] = 0
+    stm[5,2] = 0
+    stm[5,3] = 0
+    stm[5,4] = -sin(sc.nu)
+    stm[5,5] = cos(sc.nu)
+    
+    return stm
+
+# YA STM 2. Compute this STM before the chief S/C has propagated (initial).
+def stm_yank_initial(sc):
+    
+    stm = np.zeros((6,6))
+    
+    # Constants.
+    k = 1 + sc.e * cos(sc.nu)
+    c = k * cos(sc.nu)
+    s = k * sin(sc.nu)
+    eta = sqrt(1 - sc.e**2)
+    
+    # Row for xBar
+    stm[0,0] = -3 * s * (k + sc.e**2) / (k**2)
+    stm[0,1] = c - (2 * sc.e)
+    stm[0,2] = 0
+    stm[0,3] = -s * (k + 1) / k
+    stm[0,4] = 0
+    stm[0,5] = 0
+    
+    # Row for xBarDot
+    stm[1,0] = -3 * (sc.e + (c / k))
+    stm[1,1] = -s
+    stm[1,2] = 0
+    stm[1,3] = -1 * (c * ((k + 1) / k) + sc.e)
+    stm[1,4] = 0
+    stm[1,5] = 0
+    
+    # Row for yBar
+    stm[2,0] = (3 * k) - eta**2
+    stm[2,1] = sc.e * s
+    stm[2,2] = 0
+    stm[2,3] = k**2
+    stm[2,4] = 0
+    stm[2,5] = 0
+    
+    # Row for yBarDot
+    stm[3,0] = -3 * sc.e * s * ((k + 1) / (k**2))
+    stm[3,1] = -2 + sc.e * c
+    stm[3,2] = eta**2
+    stm[3,3] = -sc.e * s * (k + 1) / k
+    stm[3,4] = 0
+    stm[3,5] = 0
+    
+    # Row for zBar
+    stm[4,0] = 0
+    stm[4,1] = 0
+    stm[4,2] = 0
+    stm[4,3] = 0
+    stm[4,4] = (eta**2) * cos(sc.nu)
+    stm[4,5] = -1 * (eta**2) * sin(sc.nu)
+    
+    # Row for zBarDot
+    stm[5,0] = 0
+    stm[5,1] = 0
+    stm[5,2] = 0
+    stm[5,3] = 0
+    stm[5,4] = (eta**2) * sin(sc.nu)
+    stm[5,5] = (eta**2) * cos(sc.nu)
+    
+    return (1/(eta**2)) * stm
+
+def ya_transform(sc, rv_rtn):
+    k = 1 + sc.e * cos(sc.nu)
+    p = sc.a * (1 - sc.e**2)
+    kprime = -sc.e * sin(sc.nu)
+    r = rv_rtn[0:3]
+    v = rv_rtn[3:6]
+    rt = (k/p) * r
+    # vt = ((kprime/p) * r) + (sqrt(p/sc.GM) / k) * v
+    vt = v / norm(np.array([sc.vx, sc.vy, sc.vz]))
+    return np.concatenate((rt, vt))
+
+def ya_inverse_transform(sc, rv_rtn_t):
+    k = 1 + sc.e * cos(sc.nu)
+    p = sc.a * (1 - sc.e**2)
+    kprime = -sc.e * sin(sc.nu)
+    rt = rv_rtn_t[0:3]
+    vt = rv_rtn_t[3:6]
+    r = (p/k) * rt
+    # v = sqrt(sc.GM/p) * ((k * vt) - (kprime * rt))
+    v = vt * norm(np.array([sc.vx, sc.vy, sc.vz]))
+    return np.concatenate((r, v))
+
+def stm_yank_propagate(sc, stm_yank_init, stm_yank_curr, rv_rtn):
+    rv_tran = ya_transform(sc, rv_rtn)
+    rv_tran_order = np.array([rv_tran[0], rv_tran[3], rv_tran[1], 
+                              rv_tran[4], rv_tran[2], rv_tran[5]]) # Order
+    rv_tran_prop1 = stm_yank_init @ rv_tran_order
+    rv_tran_prop2 = stm_yank_curr @ rv_tran_prop1
+    rv_tran_unorder = np.array([rv_tran_prop2[0], rv_tran_prop2[2],
+                                rv_tran_prop2[4], rv_tran_prop2[1],
+                                rv_tran_prop2[3], rv_tran_prop2[5]]) # Unorder
+    rv_final = ya_inverse_transform(sc, rv_tran_unorder)
+    return rv_final
 
 ##############################################################################
 ##############################################################################
@@ -118,8 +191,8 @@ def stm_yank_propagate(sc, dt, nu0, rv_rtn):
 from main_ps2 import rv_eci_to_rtn, relative_rk4
 
 # Initialize SC osculating elements
-sc1_elements = [7928.137, 0.000001, 97.5976, 0.0, 250.6620, 0.00827]
-sc2_elements = [7928.137, 0.000001, 97.5976, 0.0, 250.6703, 0.00413]
+sc1_elements = [7928.137, 0.1, 97.5976, 0.0, 250.6620, 0.00827]
+sc2_elements = [7928.137, 0.1, 97.5976, 0.0, 250.6703, 0.00413]
 
 # Create the spacecraft objects.
 sc1 = spacecraft.Spacecraft( elements = sc1_elements )
@@ -156,11 +229,12 @@ while timeNow < duration:
     rtn_states_true[k,:] = rv_rtn_true
     
     # Propagate the chief SC1 (and compute the YA transition matrices)
-    nu0 = sc1.nu
+    stm_init = stm_yank_initial(sc1)            # Initial YA STM
     sc1.propagate_perturbed(timestep, timestep) # Propagate SC1
+    stm_curr = stm_yank_current(sc1, timestep)  # Final YA STM
     
     # Propagate states for SC2 copy (using YA state transitions).
-    rv_rtn_yank = stm_yank_propagate(sc1, timestep, nu0, rv_rtn_yank)
+    rv_rtn_yank = stm_yank_propagate(sc1, stm_init, stm_curr, rv_rtn_yank)
     
     # Propagate states for SC2 copy (using non-linear FDERM)
     rv_rtn_true[0:3], rv_rtn_true[3:6] = relative_rk4(timestep, sc1.n,
