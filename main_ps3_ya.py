@@ -18,21 +18,22 @@ from source import spacecraft
 
 # The YA STM follows the original YA paper in terms of matrix ordering.
 # Input ordering will be sorted within the YA STM propagation function.
+# Transforms are taken from Matthew Willis' PhD thesis
 
 def ya_transform(sc, rv_rtn):
     
     # Constants
     k = 1 + sc.e * cos(sc.nu)
     p = sc.a * (1 - sc.e**2)
-    factor = k * sqrt(sc.GM / (p**3))
+    factor = sqrt(sc.GM / p)
     kprime = -sc.e * sin(sc.nu)
     
     # Compute transform
     r = rv_rtn[0:3]
     v = rv_rtn[3:6]
     rt = (k/p) * r
-    vt = ((kprime * r) + (v / factor))
-    # vt = v / norm(np.array([sc.vx, sc.vy, sc.vz]))
+    vt = (kprime * r / p) + (v / (factor * k))
+    
     return np.concatenate((rt, vt))
 
 def ya_inverse_transform(sc, rv_rtn_t):
@@ -40,14 +41,14 @@ def ya_inverse_transform(sc, rv_rtn_t):
     # Constants
     k = 1 + sc.e * cos(sc.nu)
     p = sc.a * (1 - sc.e**2)
-    factor = k * sqrt(sc.GM / (p**3))
+    factor = sqrt(sc.GM / p)
     kprime = -sc.e * sin(sc.nu)
     
     # Compute transform
     rt = rv_rtn_t[0:3]
     vt = rv_rtn_t[3:6]
     r = (p/k) * rt
-    v = factor * (vt - kprime * r)
+    v = factor * k * (vt - kprime * r / p)
     return np.concatenate((r, v))
 
 def stm_yank_propagate(sc, dt, nu0, rv_rtn):
@@ -70,12 +71,12 @@ def stm_yank_propagate(sc, dt, nu0, rv_rtn):
     e = sc.e
     I = dt * (sc.GM**2) / (h_abs**3)
     k = 1 + e * cos(sc.nu)
-    c1 = k * cos(nu0)
-    s1 = k * sin(nu0)
-    c2 = k * cos(sc.nu)
-    s2 = k * sin(sc.nu)
-    cdelta = cos(sc.nu - nu0)
-    sdelta = sin(sc.nu - nu0)
+    c1 = k * cos(nu0)         # Using initial true anomaly
+    s1 = k * sin(nu0)         # Using initial true anomaly
+    c2 = k * cos(sc.nu)       # Using final true anomaly
+    s2 = k * sin(sc.nu)       # Using final true anomaly
+    cdelta = cos(sc.nu - nu0) # Using change in true anomaly
+    sdelta = sin(sc.nu - nu0) # Using change in true anomaly
     kdelta = 1 + e * cdelta
     cprime = -1 * (sin(sc.nu) + e * sin(2 * sc.nu))
     sprime = cos(sc.nu) + e * cos(2 * sc.nu)
@@ -118,8 +119,8 @@ def stm_yank_propagate(sc, dt, nu0, rv_rtn):
 from main_ps2 import rv_eci_to_rtn, relative_rk4
 
 # Initialize SC osculating elements
-sc1_elements = [7928.137, 0.000001, 97.5976, 0.0, 250.6620, 0.00827]
-sc2_elements = [7928.137, 0.000001, 97.5976, 0.0, 250.6703, 0.00413]
+sc1_elements = [7928.137, 0.1, 97.5976, 0.0, 250.6620, 0.00827]
+sc2_elements = [7928.137, 0.1, 97.5976, 0.0, 250.6703, 0.00413]
 
 # Create the spacecraft objects.
 sc1 = spacecraft.Spacecraft( elements = sc1_elements )
@@ -178,7 +179,6 @@ while timeNow < duration:
 
 plt.close('all')
 timeAxis = np.linspace(0, duration, samples)
-
 
 # Plot position errors between YA and truth
 plt.figure(1)
