@@ -81,9 +81,9 @@ from main_ps3_roe import compute_roe
 
 # Now test and see, based on initial conditions in Table 2 of PS3, if HCW
 # approximates motion well, with the non-linear FDERM propagation.
-sc1_elements = [7928.137, 0.00001, 97.5976, 0.0, 250.6620, 0.00827]
-sc2_elements = [7928.137, 0.00001, 97.5976, 0.0, 250.6703, 0.00413]
-sc3_elements = [7928.137, 0.00001, 97.5976, 0.0, 250.6620, 0.00000]
+sc1_elements = [7928.137, 0.6, 97.5976, 0.0, 250.6620, 0.00827]
+sc2_elements = [7928.137, 0.6, 97.5976, 0.0, 250.6703, 0.00413]
+sc3_elements = [7928.137, 0.6, 97.5976, 0.0, 250.6620, 0.00000]
 
 # Create the spacecraft objects.
 sc1 = spacecraft.Spacecraft( elements = sc1_elements )

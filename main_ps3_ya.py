@@ -25,14 +25,14 @@ def ya_transform(sc, rv_rtn):
     # Constants
     k = 1 + sc.e * cos(sc.nu)
     p = sc.a * (1 - sc.e**2)
-    factor = sqrt(sc.GM / p)
+    factor = k * sqrt((p**3) / sc.GM)
     kprime = -sc.e * sin(sc.nu)
     
     # Compute transform
     r = rv_rtn[0:3]
     v = rv_rtn[3:6]
-    rt = k * r
-    vt = kprime * r + v / factor
+    rt = (k * r)
+    vt = (kprime * r) + (factor * v)
     
     return np.concatenate((rt, vt))
 
@@ -41,14 +41,14 @@ def ya_inverse_transform(sc, rv_rtn_t):
     # Constants
     k = 1 + sc.e * cos(sc.nu)
     p = sc.a * (1 - sc.e**2)
-    factor = sqrt(sc.GM / p)
+    factor = k * sqrt((p**3) / sc.GM)
     kprime = -sc.e * sin(sc.nu)
     
     # Compute transform
     rt = rv_rtn_t[0:3]
     vt = rv_rtn_t[3:6]
-    r = rt / k
-    v = factor * (vt - kprime * r)
+    r = (rt / k)
+    v = (vt - kprime * r) / factor
     return np.concatenate((r, v))
 
 def stm_yank_propagate(sc, dt, nu0, rv_rtn):
@@ -81,17 +81,12 @@ def stm_yank_propagate(sc, dt, nu0, rv_rtn):
     cprime = -1 * (sin(sc.nu) + e * sin(2 * sc.nu))
     sprime = cos(sc.nu) + e * cos(2 * sc.nu)
     
-    # print('nu0 = ', nu0)
-    # print('nuf = ', sc.nu)
-    
     # In-plane STM1 using nu0
     sRT1 = (1/(1-e**2)) * np.array([
         [(1-e**2), (3*e*s1*((1/k)+(1/k**2))  ), (-e*s1*(1+(1/k))), (2-e*c1)],
         [(0     ), (-3*s1*((1/k)+(e**2/k**2))), (s1*(1+(1/k))   ), (c1-2*e)],
         [(0     ), (-3*((c1/k)+e)            ), (e+c1*(1+(1/k)) ), (-s1)   ],
         [(0     ), (3*k+(e**2)-1             ), (-k**2          ), (e*s1)  ]])
-    
-    # print('Initial:\n', sRT1, '\n')
     
     # In-plane STM2 using sc.nu
     sRT2 = np.array([
@@ -100,14 +95,10 @@ def stm_yank_propagate(sc, dt, nu0, rv_rtn):
         [(0), (2*s2         ), (2*c2-e      ), (3*(1-2*e*s2*I)           )],
         [(0), (sprime       ), (cprime      ), (-3*e*(sprime*I+s2/(k**2)))]])
     
-    # print('Final:\n', sRT2, '\n')
-    
     # Out-of-plane STM
     sN = np.array([
         [ cdelta, sdelta],
         [-sdelta, cdelta]]) / kdelta
-    
-    #print('Cross-track:\n', sN, '\n')
     
     # Perform propagation.
     rv_y_final = sN @ rv_y
@@ -128,8 +119,8 @@ def stm_yank_propagate(sc, dt, nu0, rv_rtn):
 from main_ps2 import rv_eci_to_rtn, relative_rk4
 
 # Initialize SC osculating elements
-sc1_elements = [7928.137, 0.0001, 97.5976, 0.0, 250.6620, 0.00827]
-sc2_elements = [7928.137, 0.0001, 97.5976, 0.0, 250.6703, 0.00413]
+sc1_elements = [7928.137, 0.1, 97.5976, 0.0, 250.6620, 0.00827]
+sc2_elements = [7928.137, 0.1, 97.5976, 0.0, 250.6703, 0.00413]
 
 # Create the spacecraft objects.
 sc1 = spacecraft.Spacecraft( elements = sc1_elements )
