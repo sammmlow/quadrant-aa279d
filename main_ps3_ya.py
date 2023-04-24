@@ -25,14 +25,14 @@ def ya_transform(sc, rv_rtn):
     # Constants
     k = 1 + sc.e * cos(sc.nu)
     p = sc.a * (1 - sc.e**2)
-    factor = k * sqrt((p**3) / sc.GM)
+    factor = sqrt(sc.GM / (p**3)) * k
     kprime = -sc.e * sin(sc.nu)
     
     # Compute transform
     r = rv_rtn[0:3]
     v = rv_rtn[3:6]
     rt = (k * r)
-    vt = (kprime * r) + (factor * v)
+    vt = (kprime * r) + (v / factor)
     
     return np.concatenate((rt, vt))
 
@@ -41,14 +41,14 @@ def ya_inverse_transform(sc, rv_rtn_t):
     # Constants
     k = 1 + sc.e * cos(sc.nu)
     p = sc.a * (1 - sc.e**2)
-    factor = k * sqrt((p**3) / sc.GM)
+    factor = sqrt(sc.GM / (p**3)) * k
     kprime = -sc.e * sin(sc.nu)
     
     # Compute transform
     rt = rv_rtn_t[0:3]
     vt = rv_rtn_t[3:6]
     r = (rt / k)
-    v = (vt - kprime * r) / factor
+    v = (vt - kprime * r) * factor
     return np.concatenate((r, v))
 
 def stm_yank_propagate(sc, dt, nu0, rv_rtn):
@@ -66,10 +66,11 @@ def stm_yank_propagate(sc, dt, nu0, rv_rtn):
     v_vec = np.array([sc.vx, sc.vy, sc.vz])
     h_vec = np.cross(r_vec, v_vec)
     h_abs = np.linalg.norm(h_vec)
+    p = sc.a * (1 - sc.e**2)
     
     # Constants.
     e = sc.e
-    I = dt * (sc.GM**2) / (h_abs**3)
+    I = dt * h_abs / p**2 # Alternatively = dt * (sc.GM**2) / (h_abs**3)
     k = 1 + e * cos(sc.nu)
     c1 = k * cos(nu0)         # Using initial true anomaly
     s1 = k * sin(nu0)         # Using initial true anomaly
@@ -116,15 +117,84 @@ def stm_yank_propagate(sc, dt, nu0, rv_rtn):
 ##############################################################################
 ##############################################################################
 
-from main_ps2 import rv_eci_to_rtn, relative_rk4
+GM = 398600.4418  # Earth default (km**3/s**2)
+
+def get_hill_frame(r, v):
+    h = np.cross(r, v)  # Angular momentum vector
+    r_hat = r / np.linalg.norm(r)  # Local X-axis (R)
+    h_hat = h / np.linalg.norm(h)  # Local Z-axis (N)
+    y_hat = np.cross(h_hat, r_hat)  # Local Y-axis (T)
+    return np.array([r_hat, y_hat, h_hat])
+
+# Define a function that takes in ECI absolute and relative positions (chief
+# to deputy) and converts them to positions and velocities in the RTN frame,
+# where the velocity is taken as a time derivative as seen in the RTN frame.
+# Inputs are 1x6 vector (3 elements of position and velocity each)
+
+def rv_eci_to_rtn(rv_c_eci, rv_cd_eci):
+    r = rv_c_eci[0:3]
+    v = rv_c_eci[3:6]
+    rho = rv_cd_eci[0:3]
+    rhoDot = rv_cd_eci[3:6]
+    nuDot = norm(np.cross(r, v)) / (norm(r)**2)  # true anomaly derivative
+    omega = np.array([0.0, 0.0, nuDot])
+    matrix_eci2rtn = get_hill_frame(r, v)
+    r_rtn = matrix_eci2rtn @ rho
+    v_rtn = matrix_eci2rtn @ rhoDot - np.cross(omega, r_rtn)
+    return r_rtn, v_rtn
+
+# Define an acceleration function to compute RTN force vectors in RTN basis
+# and as seen in RTN frame. Input vectors are also RTN basis with time
+# derivatives taken in the RTN frame.
+
+def accel_rtn(n, r_rtn, v_rtn, r0):
+    x = r_rtn[0]
+    y = r_rtn[1]
+    z = r_rtn[2]
+    xdot = v_rtn[0]
+    ydot = v_rtn[1]
+    zdot = v_rtn[2]
+    xddot_eci = ((GM*(r0+x))/((r0+x)**2 + y**2 + z**2)**1.5) - (GM/(r0**2))
+    yddot_eci = ((GM*y)/((r0+x)**2 + y**2 + z**2)**1.5)
+    zddot_eci = ((GM*z)/((r0+x)**2 + y**2 + z**2)**1.5)
+    xddot = (2*n*ydot) + (n*n*x) - xddot_eci
+    yddot = (n*n*y) - (2*n*xdot) - yddot_eci
+    zddot = -zddot_eci
+    return np.array([xddot, yddot, zddot])
+
+# Define an RK4 propagator function (Simpson's rule variant).
+# Inputs timestep `dt` in seconds, `n` as mean motion (rad/s), `r_rtn` and
+# `v_rtn` are 1x3 numpy arrays, and `r0` is the radial distance of the chief
+# spacecraft i.e. origin of the RTN frame from center of the primary attractor
+
+
+def relative_rk4(sc, dt, r_rtn, v_rtn):
+    r = np.array([sc.px, sc.py, sc.pz])
+    v = np.array([sc.vx, sc.vy, sc.vz])
+    r0 = norm(r)
+    n = norm(np.cross(r, v)) / r0**2 # True anomaly rate
+    c = 1/3 # Constant
+    k1p = v_rtn
+    k1v = accel_rtn(n, r_rtn, v_rtn, r0)
+    k2p = v_rtn + dt * (c*k1v)
+    k2v = accel_rtn(n, r_rtn + dt*(c*k1p), v_rtn + dt*(c*k1v), r0)
+    k3p = v_rtn + dt * (k2v-c*k1v)
+    k3v = accel_rtn(n, r_rtn + dt*(k2p-c*k1p), v_rtn + dt*(k2v-c*k1v), r0)
+    k4p = v_rtn + dt * (k1v-k2v+k3v)
+    k4v = accel_rtn(n, r_rtn + dt*(k1p-k2p+k3p), v_rtn + dt*(k1v-k2v+k3v), r0)
+    r_rtn_f = r_rtn + (dt/8) * (k1p + 3*k2p + 3*k3p + k4p)
+    v_rtn_f = v_rtn + (dt/8) * (k1v + 3*k2v + 3*k3v + k4v)
+    return r_rtn_f, v_rtn_f
+
+##############################################################################
+##############################################################################
 
 # Initialize SC osculating elements
-sc1_elements = [7928.137, 0.1, 97.5976, 0.0, 250.6620, 0.00827]
-sc2_elements = [7928.137, 0.1, 97.5976, 0.0, 250.6703, 0.00413]
+sc1_elements = [7928.137, 0.011, 97.5976, 0.0, 250.6620, 0.00827]
+sc2_elements = [7928.137, 0.01, 97.5976, 0.0, 250.6703, 0.00413]
 
 # Create the spacecraft objects.
 sc1 = spacecraft.Spacecraft( elements = sc1_elements )
-sc2 = spacecraft.Spacecraft( elements = sc2_elements )
 sc2 = spacecraft.Spacecraft( elements = sc2_elements )
 
 # Start the simulation here.
@@ -147,7 +217,7 @@ rv_rtn = np.concatenate((r_rtn, v_rtn)) # Merge the pos and vel
 rv_rtn_yank = rv_rtn
 rv_rtn_true = rv_rtn
 
-# ACTUAL SIMULATION CODE BELOW. Note: the actual SC2 object isn't used below.
+# ACTUAL SIMULATION CODE BELOW.
 while timeNow < duration:
 
     # Record states for SC2 copy (using YA state transitions)
@@ -163,10 +233,18 @@ while timeNow < duration:
     # Propagate states for SC2 copy (using YA state transitions).
     rv_rtn_yank = stm_yank_propagate(sc1, timestep, nu0, rv_rtn_yank)
     
-    # Propagate states for SC2 copy (using non-linear FDERM)
-    rv_rtn_true[0:3], rv_rtn_true[3:6] = relative_rk4(timestep, sc1.n,
-                                                      rv_rtn_true[0:3],
-                                                      rv_rtn_true[3:6], sc1.a)
+    # # Propagate states for SC2 copy (using non-linear FDERM)
+    # rv_rtn_true[0:3], rv_rtn_true[3:6] = relative_rk4(sc1, timestep,
+    #                                               rv_rtn_true[0:3],
+    #                                               rv_rtn_true[3:6])
+    
+    # Note that FDERM is not suitable for non-circular orbits so
+    # we will have to use the difference of the two FODE solutions
+    sc2.propagate_perturbed(timestep, timestep)
+    sc1_eci = np.array([sc1.px, sc1.py, sc1.pz, sc1.vx, sc1.vy, sc1.vz])
+    sc2_eci = np.array([sc2.px, sc2.py, sc2.pz, sc2.vx, sc2.vy, sc2.vz])
+    r_rtn_true, v_rtn_true = rv_eci_to_rtn(sc1_eci, sc2_eci - sc1_eci)
+    rv_rtn_true = np.concatenate(( r_rtn_true, v_rtn_true ))
     
     # print(np.linalg.norm(rv_rtn_true - rv_rtn_yank))
     
