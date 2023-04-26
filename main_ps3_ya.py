@@ -275,7 +275,7 @@ while timeNow < duration:
     sc1.propagate_perturbed(timestep, timestep) # Propagate SC1
     
     # Propagate states for SC2 copy (using YA state transitions).
-    rv_rtn_yank = stm_yank_propagate(sc1, timestep, nu0, rv_rtn_yank)
+    rv_rtn_yank = stm_yank_propagate_willis(sc1, timestep, nu0, rv_rtn_yank)
     
     # # Propagate states for SC2 copy (using non-linear FDERM)
     # rv_rtn_true[0:3], rv_rtn_true[3:6] = relative_rk4(sc1, timestep,
