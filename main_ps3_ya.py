@@ -25,14 +25,14 @@ def ya_transform(sc, rv_rtn):
     # Constants
     k = 1 + sc.e * cos(sc.nu)
     p = sc.a * (1 - sc.e**2)
-    factor = sqrt(sc.GM / (p**3)) * k
+    factor = sqrt(p / sc.GM)
     kprime = -sc.e * sin(sc.nu)
     
     # Compute transform
     r = rv_rtn[0:3]
     v = rv_rtn[3:6]
-    rt = (k * r)
-    vt = (kprime * r) + (v / factor)
+    rt = (k / p) * r
+    vt = ((kprime / p) * r) + ((factor / k) * v)
     
     return np.concatenate((rt, vt))
 
@@ -41,78 +41,122 @@ def ya_inverse_transform(sc, rv_rtn_t):
     # Constants
     k = 1 + sc.e * cos(sc.nu)
     p = sc.a * (1 - sc.e**2)
-    factor = sqrt(sc.GM / (p**3)) * k
+    factor = sqrt(p / sc.GM)
     kprime = -sc.e * sin(sc.nu)
     
     # Compute transform
     rt = rv_rtn_t[0:3]
     vt = rv_rtn_t[3:6]
-    r = (rt / k)
-    v = (vt - kprime * r) * factor
+    r = (p / k) * rt
+    v = ((k * vt) - kprime * rt) / factor
     return np.concatenate((r, v))
 
-def stm_yank_propagate(sc, dt, nu0, rv_rtn):
-    
-    # Perform coordinate transform (see Eq 86 of YA paper)
-    # rv_y  = [-pN, -vN]
-    # rv_xz = [ pT, -pR, vT, -vR]
-    rv_rtn_trans = ya_transform(sc, rv_rtn)
-    rv_y = np.array([-rv_rtn_trans[2], -rv_rtn_trans[5]])
-    rv_xz = np.array([rv_rtn_trans[1], -rv_rtn_trans[0],
-                      rv_rtn_trans[4], -rv_rtn_trans[3]])
-    
-    # Obtain chief spacecraft angular momentum
-    r_vec = np.array([sc.px, sc.py, sc.pz])
-    v_vec = np.array([sc.vx, sc.vy, sc.vz])
-    h_vec = np.cross(r_vec, v_vec)
-    h_abs = np.linalg.norm(h_vec)
-    p = sc.a * (1 - sc.e**2)
+def stm_yank_propagate_willis(sc, dt, f0, rv_rtn):
     
     # Constants.
-    e = sc.e
-    I = dt * h_abs / p**2 # Alternatively = dt * (sc.GM**2) / (h_abs**3)
-    k = 1 + e * cos(sc.nu)
-    c1 = k * cos(nu0)         # Using initial true anomaly
-    s1 = k * sin(nu0)         # Using initial true anomaly
-    c2 = k * cos(sc.nu)       # Using final true anomaly
-    s2 = k * sin(sc.nu)       # Using final true anomaly
-    cdelta = cos(sc.nu - nu0) # Using change in true anomaly
-    sdelta = sin(sc.nu - nu0) # Using change in true anomaly
-    kdelta = 1 + e * cdelta
-    cprime = -1 * (sin(sc.nu) + e * sin(2 * sc.nu))
-    sprime = cos(sc.nu) + e * cos(2 * sc.nu)
+    e     = sc.e
+    f     = sc.nu
+    eta   = sqrt(1-e**2)
+    etasq = eta**2
+    p     = sc.a * (1 - sc.e**2)
+    J     = dt * sqrt(sc.GM / (p**3))
+    k     = 1 + e * cos(f)
+    k0    = 1 + e * cos(f0)
+    ksf   = k * sin(f)
+    ksf0  = k0 * sin(f0)
+    ksfp  = cos(f) + e*cos(2*f)
+    kcf   = k * cos(f)
+    kcf0  = k0 * cos(f0)
+    kcfp  = -sin(f) - e*sin(2*f)
     
-    # In-plane STM1 using nu0
-    sRT1 = (1/(1-e**2)) * np.array([
-        [(1-e**2), (3*e*s1*((1/k)+(1/k**2))  ), (-e*s1*(1+(1/k))), (2-e*c1)],
-        [(0     ), (-3*s1*((1/k)+(e**2/k**2))), (s1*(1+(1/k))   ), (c1-2*e)],
-        [(0     ), (-3*((c1/k)+e)            ), (e+c1*(1+(1/k)) ), (-s1)   ],
-        [(0     ), (3*k+(e**2)-1             ), (-k**2          ), (e*s1)  ]])
+    # Compute the transform matrix for pseudo-initial states
+    STM1 = (1/etasq) * np.array([
+        [(6*k0+(2*e**2)-2),         (0),     (0),             (2*e*ksf0/etasq), (2*k0**2),           (0)             ],
+        [(-3*(1+(e**2)/k0)*sin(f0)), (0),     (0),             (kcf0-2*e),       (-sin(f0)*(1+k0)),   (0)             ],
+        [(-3*(e+cos(f0))),           (0),     (0),             (-ksf0),          (-e-(1+k0)*cos(f0)), (0)             ],
+        [(-3*e*(1+1/k0)*sin(f0)),    (etasq), (0),             (e*kcf0-2),       (-e*sin(f0)*(1+k0)), (0)             ],
+        [(0),                        (0),     (etasq*sin(f0)), (0),              (0),                 (etasq*cos(f0)) ],
+        [(0),                        (0),     (etasq*cos(f0)), (0),              (0),                 (-etasq*sin(f0))]])
     
-    # In-plane STM2 using sc.nu
-    sRT2 = np.array([
-        [(1), (-c2*(1+(1/k))), (s2*(1+(1/k))), (3*(k**2)*I               )],
-        [(0), (s2           ), (c2          ), (2-3*e*s2*I               )],
-        [(0), (2*s2         ), (2*c2-e      ), (3*(1-2*e*s2*I)           )],
-        [(0), (sprime       ), (cprime      ), (-3*e*(sprime*I+s2/(k**2)))]])
+    # Compute the state transition matrix for pseudo-final states
+    STM2 = np.array([
+        [(1-1.5*e*ksf*J),              (ksf),          (kcf),           (0), (0),      (0)      ],
+        [(-1.5*(k**2)*J),              ((1+k)*cos(f)), (-(1+k)*sin(f)), (1), (0),      (0)      ],
+        [(0),                          (0),            (0),             (0), (sin(f)), (cos(f)) ],
+        [(-1.5*e*(ksfp*J+(sin(f)/k))), (ksfp),         (kcfp),          (0), (0),      (0)      ],
+        [(1.5*(2*e*J*ksf-1)),          (-2*ksf),       (e-2*kcf),       (0), (0),      (0)      ],
+        [(0),                          (0),            (0),             (0), (cos(f)), (-sin(f))]])
     
-    # Out-of-plane STM
-    sN = np.array([
-        [ cdelta, sdelta],
-        [-sdelta, cdelta]]) / kdelta
+    # print(STM2 @ STM1)
     
-    # Perform propagation.
-    rv_y_final = sN @ rv_y
-    rv_xz_final = sRT2 @ sRT1 @ rv_xz
-    
-    # Re-order the vector back into [pR, pT, pN, vR, vT, vN]
-    r_rtn_t_final = np.array([-rv_xz_final[1], rv_xz_final[0], -rv_y_final[0]])
-    v_rtn_t_final = np.array([-rv_xz_final[3], rv_xz_final[2], -rv_y_final[1]])
-    rv_rtn_t_final = np.concatenate((r_rtn_t_final, v_rtn_t_final))
-    
-    # Inverse coordinate transform
-    rv_rtn_final = ya_inverse_transform(sc, rv_rtn_t_final)
+    # Perform the coordinate transform and state transition.
+    rv_rtn_trans = ya_transform(sc, rv_rtn)
+    rv_rtn_trans_final = STM2 @ STM1 @ rv_rtn_trans
+    rv_rtn_final = ya_inverse_transform(sc, rv_rtn_trans_final)
     return rv_rtn_final
+
+# def stm_yank_propagate(sc, dt, nu0, rv_rtn):
+    
+#     # Perform coordinate transform (see Eq 86 of YA paper)
+#     # rv_y  = [-pN, -vN]
+#     # rv_xz = [ pT, -pR, vT, -vR]
+#     rv_rtn_trans = ya_transform(sc, rv_rtn)
+#     rv_y = np.array([-rv_rtn_trans[2], -rv_rtn_trans[5]])
+#     rv_xz = np.array([rv_rtn_trans[1], -rv_rtn_trans[0],
+#                       rv_rtn_trans[4], -rv_rtn_trans[3]])
+    
+#     # Obtain chief spacecraft angular momentum
+#     r_vec = np.array([sc.px, sc.py, sc.pz])
+#     v_vec = np.array([sc.vx, sc.vy, sc.vz])
+#     h_vec = np.cross(r_vec, v_vec)
+#     h_abs = np.linalg.norm(h_vec)
+#     p = sc.a * (1 - sc.e**2)
+    
+#     # Constants.
+#     e = sc.e
+#     I = dt * h_abs / p**2 # Alternatively = dt * (sc.GM**2) / (h_abs**3)
+#     k = 1 + e * cos(sc.nu)
+#     c1 = k * cos(nu0)         # Using initial true anomaly
+#     s1 = k * sin(nu0)         # Using initial true anomaly
+#     c2 = k * cos(sc.nu)       # Using final true anomaly
+#     s2 = k * sin(sc.nu)       # Using final true anomaly
+#     cdelta = cos(sc.nu - nu0) # Using change in true anomaly
+#     sdelta = sin(sc.nu - nu0) # Using change in true anomaly
+#     kdelta = 1 + e * cdelta
+#     cprime = -1 * (sin(sc.nu) + e * sin(2 * sc.nu))
+#     sprime = cos(sc.nu) + e * cos(2 * sc.nu)
+    
+#     # In-plane STM1 using nu0
+#     sRT1 = (1/(1-e**2)) * np.array([
+#         [(1-e**2), (3*e*s1*((1/k)+(1/k**2))  ), (-e*s1*(1+(1/k))), (2-e*c1)],
+#         [(0     ), (-3*s1*((1/k)+(e**2/k**2))), (s1*(1+(1/k))   ), (c1-2*e)],
+#         [(0     ), (-3*((c1/k)+e)            ), (e+c1*(1+(1/k)) ), (-s1)   ],
+#         [(0     ), (3*k+(e**2)-1             ), (-k**2          ), (e*s1)  ]])
+    
+#     # In-plane STM2 using sc.nu
+#     sRT2 = np.array([
+#         [(1), (-c2*(1+(1/k))), (s2*(1+(1/k))), (3*(k**2)*I               )],
+#         [(0), (s2           ), (c2          ), (2-3*e*s2*I               )],
+#         [(0), (2*s2         ), (2*c2-e      ), (3*(1-2*e*s2*I)           )],
+#         [(0), (sprime       ), (cprime      ), (-3*e*(sprime*I+s2/(k**2)))]])
+    
+#     # Out-of-plane STM
+#     sN = np.array([
+#         [ cdelta, sdelta],
+#         [-sdelta, cdelta]]) / kdelta
+    
+#     # Perform propagation.
+#     rv_y_final = sN @ rv_y
+#     rv_xz_final = sRT2 @ sRT1 @ rv_xz
+    
+#     # Re-order the vector back into [pR, pT, pN, vR, vT, vN]
+#     r_rtn_t_final = np.array([-rv_xz_final[1], rv_xz_final[0], -rv_y_final[0]])
+#     v_rtn_t_final = np.array([-rv_xz_final[3], rv_xz_final[2], -rv_y_final[1]])
+#     rv_rtn_t_final = np.concatenate((r_rtn_t_final, v_rtn_t_final))
+    
+#     # Inverse coordinate transform
+#     rv_rtn_final = ya_inverse_transform(sc, rv_rtn_t_final)
+#     return rv_rtn_final
 
 ##############################################################################
 ##############################################################################
@@ -190,8 +234,8 @@ def relative_rk4(sc, dt, r_rtn, v_rtn):
 ##############################################################################
 
 # Initialize SC osculating elements
-sc1_elements = [7928.137, 0.011, 97.5976, 0.0, 250.6620, 0.00827]
-sc2_elements = [7928.137, 0.01, 97.5976, 0.0, 250.6703, 0.00413]
+sc1_elements = [7928.137, 0.1, 97.5976, 0.0, 250.6620, 0.00827]
+sc2_elements = [7928.137, 0.1, 97.5976, 0.0, 250.6703, 0.00413]
 
 # Create the spacecraft objects.
 sc1 = spacecraft.Spacecraft( elements = sc1_elements )
