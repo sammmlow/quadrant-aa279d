@@ -683,6 +683,7 @@ class Spacecraft():
             da = (self.a - self.chief.a) / self.chief.a
             dL = (self.M + self.w) - (self.chief.M + self.chief.w)
             dL = dL + (self.R - self.chief.R) * cos(self.chief.i)
+            dL = (dL + PI) % (2 * PI) - PI # Wrap between -pi and +pi
             ex = self.e * cos(self.w) - self.chief.e * cos(self.chief.w)
             ey = self.e * sin(self.w) - self.chief.e * sin(self.chief.w)
             ix = self.i - self.chief.i

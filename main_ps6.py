@@ -34,7 +34,7 @@ sc1.forces['drag'] = True # Enable J2 effects
 rROE = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 
 # Start the simulation here.
-timeNow, duration, timestep = 0.0, 7 * 86400.0, 10.0 # Time in seconds
+timeNow, duration, timestep = 0.0, 7 * 86400.0, 60.0 # Time in seconds
 k, samples = 0, int(duration / timestep) # Sample count and total samples
 
 # Matrix to store the data
@@ -116,7 +116,8 @@ while timeNow < duration:
     P = build_P(32, 0.00002, ROE, rROE)
     
     # Compute control input. For now assume desired ROE is zero (rendezvous).
-    u = -1 * pinv(B) @ ((A @ ROE) + (P @ (ROE - rROE)))
+    # u = -1 * pinv(B) @ ((A @ ROE) + (P @ (ROE - rROE)))
+    u = np.zeros(3)
     
     # Apply the control maneuver to SC2.
     sc2.set_thruster_acceleration( u )
