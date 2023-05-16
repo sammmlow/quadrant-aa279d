@@ -23,13 +23,21 @@ sc2 = spacecraft.Spacecraft( elements = sc2_elements )
 # Set the chief of the spacecraft. Enable maneuvers for SC2.
 sc2.chief = sc1 # ROEs and RTN states computed w.r.t. SC1
 sc2.forces['maneuvers'] = True # Important to switch this on.
+sc2.forces['j2'] = True # Enable J2 effects
+sc1.forces['j2'] = True # Enable J2 effects
+
+# Set the reference set of ROEs to track.
+rROE = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 
 # Start the simulation here.
-timeNow, duration, timestep = 0.0, 86400.0, 30.0 # Time in seconds
+timeNow, duration, timestep = 0.0, 7 * 86400.0, 10.0 # Time in seconds
 k, samples = 0, int(duration / timestep) # Sample count and total samples
 
 # Matrix to store the data
 state_history = np.zeros((samples, 6))
+roe_history = np.zeros((samples, 6))
+deltaV_history = np.zeros(samples)
+total_deltaV = 0.0
 
 # Keplerian plant matrix.
 def build_A(sc):
@@ -65,12 +73,34 @@ def build_B(sc):
    
     return (1/(sc.n * sc.a)) * B
 
+# Gain matrix P for Lyapunov control. Takes as input current ROEs and the
+# reference ROEs. Negates the elements pertaining to dL (2nd ROE element).
+def build_P(N, K, ROE, rROE):
+    dROE = ROE - rROE
+    phi_ip = np.arctan2(dROE[3], dROE[2])
+    phi_op = np.arctan2(dROE[5], dROE[4])
+    phi_ip_sc = np.arctan2(ROE[3], ROE[2])
+    phi_op_sc = np.arctan2(ROE[5], ROE[4])
+    J = phi_ip_sc - phi_ip
+    H = phi_op_sc - phi_op
+    P = np.zeros((6,6))
+    P[0,0] = cos(J)**N
+    P[2,2] = cos(J)**N
+    P[3,3] = cos(J)**N
+    P[4,4] = cos(H)**N
+    P[5,5] = cos(H)**N
+    return K * P
+    
+
 # In the loop, in order for the deputy to properly update its ROEs and RTN, 
 # the chief needs to be propagated first...
 while timeNow < duration:
     
     # Record states.
+    ROE = np.array([sc2.da, sc2.dL, sc2.ex, sc2.ey, sc2.ix, sc2.iy])
+    roe_history[k,:] = ROE
     state_history[k,:] = [sc2.pR, sc2.pT, sc2.pN, sc2.vR, sc2.vT, sc2.vN]
+    deltaV_history[k] = total_deltaV
 
     # Compute the plant matrix A (time-varying for non-Keplerian case).
     A = build_A(sc1)
@@ -78,13 +108,11 @@ while timeNow < duration:
     # Compute the control matrix B.
     B = build_B(sc1)
     
-    # Build some gain matrix.
-    P = 0.0001 * np.eye(6)
+    # Build the gain matrix.
+    P = build_P(32, 0.00002, ROE, rROE)
     
     # Compute control input. For now assume desired ROE is zero (rendezvous).
-    ROE = np.array([sc2.da, sc2.dL, sc2.ex, sc2.ey, sc2.ix, sc2.iy])
-    dROE = ROE
-    u = -1 * pinv(B) @ ((A @ ROE) + (P @ dROE))
+    u = -1 * pinv(B) @ ((A @ ROE) + (P @ (ROE - rROE)))
     
     # Apply the control maneuver to SC2.
     sc2.set_thruster_acceleration( u )
@@ -93,11 +121,14 @@ while timeNow < duration:
     sc1.propagate_perturbed(timestep, timestep)
     sc2.propagate_perturbed(timestep, timestep)
 
-    # Update time and sample count.
+    # Update delta-V cost incurred, current time, and sample count.
+    total_deltaV += norm(u) * timestep
     timeNow += timestep
     k += 1
     
 # Plot the full trajectory below, with chief as a quiver triad.
+plt.close('all')
+
 axisLimit = 1.0 # km
 fig1 = plt.figure(1).add_subplot(projection='3d')
 fig1.plot(state_history[:,1], state_history[:,2], state_history[:,0])
@@ -109,3 +140,37 @@ fig1.grid()
 fig1.set_xlabel('T [km]')
 fig1.set_ylabel('N [km]')
 fig1.set_zlabel('R [km]')
+
+# Plot the evolution of ROE plots below.
+plt.figure(2)
+plt.title('Evolution of Quasi-Nonsingular ROEs')
+plt.subplot(1, 3, 1)
+plt.plot(roe_history[:,1], roe_history[:,0])
+plt.show()
+plt.scatter([rROE[1]], [rROE[0]], c='k')
+plt.xlabel(r'$\delta \lambda$')
+plt.ylabel(r'$\delta a$')
+plt.grid()
+plt.subplot(1, 3, 2)
+plt.plot(roe_history[:,2], roe_history[:,3])
+plt.show()
+plt.scatter([rROE[2]], [rROE[3]], c='k')
+plt.xlabel(r'$\delta e_x$')
+plt.ylabel(r'$\delta e_y$')
+plt.grid()
+plt.subplot(1, 3, 3)
+plt.plot(roe_history[:,4], roe_history[:,5])
+plt.show()
+plt.scatter([rROE[4]], [rROE[5]], c='k')
+plt.xlabel(r'$\delta i_x$')
+plt.ylabel(r'$\delta i_y$')
+plt.grid()
+
+# Plot the total DV consumption.
+timeAxis = np.linspace(0, duration, samples)
+plt.figure(3)
+plt.plot(timeAxis, deltaV_history * 1000)
+plt.title('Cumulative Delta-V Consumption over Time')
+plt.xlabel('Time [seconds]')
+plt.ylabel('Delta-V [m/s]')
+plt.grid()
