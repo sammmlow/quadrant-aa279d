@@ -81,9 +81,9 @@ from main_ps3_roe import compute_roe
 
 # Now test and see, based on initial conditions in Table 2 of PS3, if HCW
 # approximates motion well, with the non-linear FDERM propagation.
-sc1_elements = [7928.137, 0.1, 97.5976, 0.0, 250.6620, 0.00827]
-sc2_elements = [7928.137, 0.1, 97.5976, 0.0, 250.6703, 0.00413]
-sc3_elements = [7928.137, 0.1, 97.5976, 0.0, 250.6620, 0.00000]
+sc1_elements = [7928.137, 0.000001, 97.5976, 0.0, 250.6620, 0.00827]
+sc2_elements = [7928.137, 0.000001, 97.5976, 0.0, 250.6703, 0.00413]
+sc3_elements = [7928.137, 0.000001, 97.5976, 0.0, 250.6620, 0.00000]
 
 # Create the spacecraft objects.
 sc1 = spacecraft.Spacecraft( elements = sc1_elements )
@@ -95,7 +95,7 @@ compute_roe(sc1, sc2)
 compute_roe(sc1, sc3)
 
 # Start the simulation here.
-timeNow, duration, timestep = 0.0, 30.0, 30.0 # Seconds
+timeNow, duration, timestep = 0.0, 86400.0, 30.0 # Seconds
 samples = int(duration / timestep)
 k = 0  # Sample count
 
@@ -124,7 +124,7 @@ while timeNow < duration:
     rtn_states_true[k,:] = rv_rtn_true
     
     # Propagate states for SC2 copy (using HCW state transitions)
-    print(stm_hcw(sc1, timestep))
+    # print(stm_hcw(sc1, timestep))
     rv_rtn_hcw = stm_hcw(sc1, timestep) @ rv_rtn_hcw
     
     # Propagate states for SC2 copy (using non-linear FDERM)

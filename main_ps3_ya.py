@@ -71,12 +71,12 @@ def stm_yank_propagate_willis(sc, dt, f0, rv_rtn):
     
     # Compute the transform matrix for pseudo-initial states
     STM1 = (1/etasq) * np.array([
-        [(6*k0+(2*e**2)-2),         (0),     (0),             (2*e*ksf0/etasq), (2*k0**2),           (0)             ],
-        [(-3*(1+(e**2)/k0)*sin(f0)), (0),     (0),             (kcf0-2*e),       (-sin(f0)*(1+k0)),   (0)             ],
-        [(-3*(e+cos(f0))),           (0),     (0),             (-ksf0),          (-e-(1+k0)*cos(f0)), (0)             ],
-        [(-3*e*(1+1/k0)*sin(f0)),    (etasq), (0),             (e*kcf0-2),       (-e*sin(f0)*(1+k0)), (0)             ],
-        [(0),                        (0),     (etasq*sin(f0)), (0),              (0),                 (etasq*cos(f0)) ],
-        [(0),                        (0),     (etasq*cos(f0)), (0),              (0),                 (-etasq*sin(f0))]])
+        [(6*k0+(2*e**2)-2),          (0),     (0),             (2*e*ksf0), (2*k0**2),           (0)             ],
+        [(-3*(1+(e**2)/k0)*sin(f0)), (0),     (0),             (kcf0-2*e), (-sin(f0)*(1+k0)),   (0)             ],
+        [(-3*(e+cos(f0))),           (0),     (0),             (-ksf0),    (-e-(1+k0)*cos(f0)), (0)             ],
+        [(-3*e*(1+(1/k0))*sin(f0)),  (etasq), (0),             (e*kcf0-2), (-e*sin(f0)*(1+k0)), (0)             ],
+        [(0),                        (0),     (etasq*sin(f0)), (0),        (0),                 (etasq*cos(f0)) ],
+        [(0),                        (0),     (etasq*cos(f0)), (0),        (0),                 (-etasq*sin(f0))]])
     
     # Compute the state transition matrix for pseudo-final states
     STM2 = np.array([
@@ -87,7 +87,9 @@ def stm_yank_propagate_willis(sc, dt, f0, rv_rtn):
         [(1.5*(2*e*J*ksf-1)),          (-2*ksf),       (e-2*kcf),       (0), (0),      (0)      ],
         [(0),                          (0),            (0),             (0), (cos(f)), (-sin(f))]])
     
-    # print(STM2 @ STM1)
+    # # print(STM2 @ STM1)
+    # eigCheck = np.linalg.eig(STM2 @ STM1)
+    # print(eigCheck)
     
     # Perform the coordinate transform and state transition.
     rv_rtn_trans = ya_transform(sc, rv_rtn)
@@ -187,7 +189,7 @@ def rv_eci_to_rtn(rv_c_eci, rv_cd_eci):
     v_rtn = matrix_eci2rtn @ rhoDot - np.cross(omega, r_rtn)
     return r_rtn, v_rtn
 
-# Define an acceleration function to compute RTN force vectors in RTN basis
+# Define an acceleration function to compute RTN vectors in RTN basis
 # and as seen in RTN frame. Input vectors are also RTN basis with time
 # derivatives taken in the RTN frame.
 
@@ -233,18 +235,26 @@ def relative_rk4(sc, dt, r_rtn, v_rtn):
 ##############################################################################
 ##############################################################################
 
+from main_ps3_roe import compute_roe
+
 # Initialize SC osculating elements
-sc1_elements = [7928.137, 0.1, 97.5976, 0.0, 250.6620, 0.00827]
-sc2_elements = [7928.137, 0.1, 97.5976, 0.0, 250.6703, 0.00413]
+sc1_elements = [7928.137, 0.00100, 97.5976, 0.0, 250.6620, 0.00827]
+sc2_elements = [7928.137, 0.0009, 97.5976, 0.0, 250.6703, 0.00413]
+sc3_elements = [7928.137, 0.0009, 97.5976, 0.0, 250.6620, 0.00000]
 
 # Create the spacecraft objects.
 sc1 = spacecraft.Spacecraft( elements = sc1_elements )
 sc2 = spacecraft.Spacecraft( elements = sc2_elements )
+sc3 = spacecraft.Spacecraft( elements = sc3_elements )
+
+# Print out the QSN ROEs for SC2
+compute_roe(sc1, sc2)
+compute_roe(sc1, sc3)
 
 # Start the simulation here.
 timeNow, duration, timestep = 0.0, 86400.0, 30.0 # Seconds
 samples = int(duration / timestep)
-k = 0  # Sample count
+ks = 0  # Sample count
 
 # Matrix to store the data
 rtn_states_yank = np.zeros((samples, 6))
@@ -265,13 +275,13 @@ rv_rtn_true = rv_rtn
 while timeNow < duration:
 
     # Record states for SC2 copy (using YA state transitions)
-    rtn_states_yank[k,:] = rv_rtn_yank
+    rtn_states_yank[ks,:] = rv_rtn_yank
     
     # Record states for SC2 copy (using non-linear FDERM)
-    rtn_states_true[k,:] = rv_rtn_true
+    rtn_states_true[ks,:] = rv_rtn_true
     
     # Propagate the chief SC1 (and compute the YA transition matrices)
-    nu0 = sc1.nu
+    nu0 = sc1.nu # Save initial true anomaly
     sc1.propagate_perturbed(timestep, timestep) # Propagate SC1
     
     # Propagate states for SC2 copy (using YA state transitions).
@@ -294,7 +304,7 @@ while timeNow < duration:
     
     # Update time and sample count.
     timeNow += timestep
-    k += 1
+    ks += 1
 
 ##############################################################################
 ##############################################################################
@@ -358,7 +368,7 @@ plt.show()
 
 # Plot RTN of truth and YA in 3D
 fig3 = plt.figure(3).add_subplot(projection='3d')
-axisLimit = 1.0 # km
+axisLimit = 2.0 # km
 
 # Plot YA vs truth
 fig3.plot(rtn_states_yank[:,1], rtn_states_yank[:,2], rtn_states_yank[:,0],

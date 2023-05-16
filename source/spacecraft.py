@@ -22,6 +22,7 @@ import math
 import random
 import datetime
 import numpy as np
+from math import sin, cos
 
 from source import anomaly
 from source import rotation
@@ -38,8 +39,7 @@ names = ['Arries', 'Elnubnub', 'Ken', 'Randy', 'Kirkner', 'Lombard', 'Feras',
          'Maxwell', 'Thomas', 'Bloch', 'Rynhart', 'AJ Hager', 'Tik', 'Will',
          'Stephen', 'Eckman', 'Jack', 'Shirai', 'Julian', 'Rafn', 'Markand',
          'Nelis', 'Chris', 'Malott', 'Davion', 'Caldwell', 'Kusy', 'Lagardi',
-         'Vincent', 'Kevin', 'Fish', 'Turing', 'Stelly', 'Teldarin',
-         'Fanfan','Geissberger']
+         'Vincent', 'Kevin', 'Fish', 'Turing', 'Stelly', 'Teldarin', 'Fanfan']
 
 class Spacecraft():
     '''
@@ -76,8 +76,6 @@ class Spacecraft():
     def __init__( self, elements=None, states=None, epoch=None, forces=None, 
                   torque=None, attBN=None, ohmBN=None, name=None, mass=None,
                   inertia=None, area=None, Cd=None, GM=None ):
-                 
-                 
         
         # State vector units are:
         # elements: [ km, none, deg, deg, deg, deg ]
@@ -98,6 +96,10 @@ class Spacecraft():
         self.Cd = Cd
         self.GM = GM
         self.attIntgErr = None
+        
+        # Initialize parameters for relative states
+        self.chief = None
+        self._resetstates_relative()
         
         # If the elements are defined, then initialize both elements and the
         # cartesian states from `elements`. Else, initialize it via `states`.
@@ -130,6 +132,28 @@ class Spacecraft():
         self.__dict__['mu'] = 0.0
         self.__dict__['n']  = 0.0
         self.__dict__['T']  = 0.0
+        
+    # Reset spacecraft relative state attributes.
+    def _resetstates_relative(self):
+        self.__dict__['da'] = 0.0
+        self.__dict__['dL'] = 0.0
+        self.__dict__['ex'] = 0.0
+        self.__dict__['ey'] = 0.0
+        self.__dict__['ix'] = 0.0
+        self.__dict__['iy'] = 0.0
+        self.__dict__['pR'] = 0.0
+        self.__dict__['pT'] = 0.0
+        self.__dict__['pN'] = 0.0
+        self.__dict__['vR'] = 0.0
+        self.__dict__['vT'] = 0.0
+        self.__dict__['vN'] = 0.0
+    
+    # Constrain the attribute values and types strictly in this order.
+    def __getattr__(self, key, value):
+        
+        # __getattr__ for 'chief' attribute.
+        if key == 'chief':
+            return value
         
     # Constrain the attribute values and types strictly in this order.
     def __setattr__(self, key, value):
@@ -432,6 +456,20 @@ class Spacecraft():
             self.__dict__[key] = value
             self.__dict__['n'] = 2 * PI / value
             self.__dict__['a'] = (self.GM * (value / (2*PI))**2 )**(1/3)
+            
+        # __setattr__ for 'chief' attribute. Updates relative states and ROEs.
+        # Need to check if the type is that of a `spacecraft` object.
+        if key == 'chief':
+            if value is None:
+                self.__dict__[key] = None
+                self._resetstates_relative()
+            else:
+                if type(value) != type(self):
+                    raise ValueError("Chief has to be spacecraft object!")
+                else:
+                    self.__dict__[key] = value
+                    self._update_elements_roe()
+                    self._update_states_rtn()
     
     def __repr__(self):
         return 'Spacecraft ' + str(self.name)
@@ -634,6 +672,59 @@ class Spacecraft():
         self.__dict__['n'] = n
         self.__dict__['T'] = 2 * PI / n
     
+    # Update most recent set of quasi non-singular relative orbital elements
+    def _update_elements_roe(self):
+        if self.chief == None:
+            raise ValueError("A chief is not assigned to this spacecraft!")
+        else:
+            da = (self.a - self.chief.a) / self.chief.a
+            dL = (self.M + self.w) - (self.chief.M + self.chief.w)
+            dL = dL + (self.R - self.chief.R) * cos(self.chief.i)
+            ex = self.e * cos(self.w) - self.chief.e * cos(self.chief.w)
+            ey = self.e * sin(self.w) - self.chief.e * sin(self.chief.w)
+            ix = self.i - self.chief.i
+            iy = (self.R - self.chief.R) * sin(self.chief.i)
+            self.__dict__['da'] = da
+            self.__dict__['dL'] = dL
+            self.__dict__['ex'] = ex
+            self.__dict__['ey'] = ey
+            self.__dict__['ix'] = ix
+            self.__dict__['iy'] = iy
+    
+    # Update most recent set of radial-tangent-normal (RTN) coordinates
+    def _update_states_rtn(self):
+        if self.chief == None:
+            raise ValueError("A chief is not assigned to this spacecraft!")
+        else:
+            r_d = np.array([self.px, self.py, self.pz])
+            v_d = np.array([self.vx, self.vy, self.vz])
+            r_c = np.array([self.chief.px, self.chief.py, self.chief.pz])
+            v_c = np.array([self.chief.vx, self.chief.vy, self.chief.vz])
+            r_cd = r_d - r_c
+            v_cd = v_d - v_c
+            nuDot = np.linalg.norm( np.cross(r_c, v_c) ) # True anomaly rate
+            nuDot = nuDot / ( np.linalg.norm(r_c)**2 )   # True anomaly rate
+            omega = np.array([0.0, 0.0, nuDot])
+            hillMatrix = self.get_hill_frame()
+            r_rtn = hillMatrix @ r_cd
+            v_rtn = hillMatrix @ v_cd - np.cross(omega, r_rtn)
+            self.__dict__['pR'] = r_rtn[0]
+            self.__dict__['pT'] = r_rtn[1]
+            self.__dict__['pN'] = r_rtn[2]
+            self.__dict__['vR'] = v_rtn[0]
+            self.__dict__['vT'] = v_rtn[1]
+            self.__dict__['vN'] = v_rtn[2]
+            
+    def update_relative_motion(self):
+        self._update_elements_roe()
+        self._update_states_rtn()
+        
+    def print_elements_roe(self):
+        print(self.da, self.dL, self.ex, self.ey, self.ix, self.iy)
+        
+    def print_states_rtn(self):
+        print(self.pR, self.pT, self.pN, self.vR, self.vT, self.vN)
+        
     # Compute the Hill-Frame transformation matrix.
     def get_hill_frame(self):
         pC = [self.px, self.py, self.pz]
@@ -682,6 +773,10 @@ class Spacecraft():
         self.M = R2D * (self.M + self.n * dt)
         self.epoch += datetime.timedelta( seconds = dt )
         
+        # Update relative states if being tagged to a chief.
+        if self.chief != None:
+            self.update_relative_motion()
+        
     # Numerical propagator using RK4.
     def propagate_perturbed(self, t, step, integrator='RK4'):
         time_left = t
@@ -692,6 +787,10 @@ class Spacecraft():
                 time_left -= step
             integrate.RK4(self, time_left)
             self.epoch += datetime.timedelta( seconds = time_left )
+            
+            # Update relative states if being tagged to a chief.
+            if self.chief != None:
+                self.update_relative_motion()
     
     def plot_orbit(self):
         return None
