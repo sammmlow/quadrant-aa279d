@@ -73,5 +73,17 @@ def forces( pos, vel, sc ):
         dragAccel = 0.5 * Cd * dragDensity * areaMassRatio * ((V*1000)**2)
         acceleration -= dragAccel * ( vel / V ) / 1000
     
+    # Include the addition of continuous thruster force if necessary.
+    if sc.forces['maneuvers'] == True:
+        # Check if the maneuver vector is expressed in RTN basis.
+        if sc.force_frame == 'RTN':
+            eci2rtn = sc.get_hill_frame()
+            acceleration += np.transpose(eci2rtn) @ sc.thruster_acceleration
+        # Check if the maneuver vector is expressed in ECI basis.
+        elif sc.force_frame == 'ECI':
+            acceleration += sc.thruster_acceleration
+        else:
+            print("Warning, unknown maneuver frame! No maneuvers applied.")
+    
     # Acceleration vector is in km/s**2
     return acceleration

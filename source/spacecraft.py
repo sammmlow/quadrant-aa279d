@@ -100,6 +100,8 @@ class Spacecraft():
         # Initialize parameters for relative states
         self.chief = None
         self._resetstates_relative()
+        self.set_force_frame('RTN')
+        self.set_thruster_acceleration([0,0,0])
         
         # If the elements are defined, then initialize both elements and the
         # cartesian states from `elements`. Else, initialize it via `states`.
@@ -177,7 +179,8 @@ class Spacecraft():
                                       'drag':False,
                                       'srp':False,
                                       'moon':False,
-                                      'sun':False}
+                                      'sun':False,
+                                      'maneuvers':False}
             else:
                 if type(value) is dict:
                     print('Toggling the current forces:')
@@ -705,9 +708,9 @@ class Spacecraft():
             nuDot = np.linalg.norm( np.cross(r_c, v_c) ) # True anomaly rate
             nuDot = nuDot / ( np.linalg.norm(r_c)**2 )   # True anomaly rate
             omega = np.array([0.0, 0.0, nuDot])
-            hillMatrix = self.get_hill_frame()
-            r_rtn = hillMatrix @ r_cd
-            v_rtn = hillMatrix @ v_cd - np.cross(omega, r_rtn)
+            eci2rtn = self.get_hill_frame()
+            r_rtn = eci2rtn @ r_cd
+            v_rtn = eci2rtn @ v_cd - np.cross(omega, r_rtn)
             self.__dict__['pR'] = r_rtn[0]
             self.__dict__['pT'] = r_rtn[1]
             self.__dict__['pN'] = r_rtn[2]
@@ -725,7 +728,25 @@ class Spacecraft():
     def print_states_rtn(self):
         print(self.pR, self.pT, self.pN, self.vR, self.vT, self.vN)
         
-    # Compute the Hill-Frame transformation matrix.
+    def set_force_frame(self, value):
+        if type(value) == str:
+            if value == 'ECI' or value == 'RTN':
+                self.__dict__['force_frame'] = value
+            else:
+                raise ValueError('Unknown string applied for maneuver frame!')
+        else:
+            raise TypeError('Force frame should be a string RTN or ECI')
+    
+    def set_thruster_acceleration(self, value):
+        if isinstance(value, np.ndarray) or isinstance(value, list):
+            if len(value) == 3:
+                self.__dict__['thruster_acceleration'] = np.array(value)
+            else:
+                raise ValueError('Thrust vector has to be length 3')
+        else:
+            raise TypeError('Thrust vector has to be a list or NumPy array!')
+        
+    # Compute the Hill-Frame ECI2RTN transformation matrix.
     def get_hill_frame(self):
         pC = [self.px, self.py, self.pz]
         vC = [self.vx, self.vy, self.vz]
@@ -792,9 +813,11 @@ class Spacecraft():
             if self.chief != None:
                 self.update_relative_motion()
     
+    # TODO
     def plot_orbit(self):
         return None
     
+    # TODO
     def plot_groundtrack(self):
         return None
     
