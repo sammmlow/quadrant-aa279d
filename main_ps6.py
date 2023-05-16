@@ -22,9 +22,13 @@ sc2 = spacecraft.Spacecraft( elements = sc2_elements )
 
 # Set the chief of the spacecraft. Enable maneuvers for SC2.
 sc2.chief = sc1 # ROEs and RTN states computed w.r.t. SC1
+
+# Toggle forces on each spacecraft
 sc2.forces['maneuvers'] = True # Important to switch this on.
 sc2.forces['j2'] = True # Enable J2 effects
 sc1.forces['j2'] = True # Enable J2 effects
+sc2.forces['drag'] = True # Enable J2 effects
+sc1.forces['drag'] = True # Enable J2 effects
 
 # Set the reference set of ROEs to track.
 rROE = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])

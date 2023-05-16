@@ -71,6 +71,9 @@ def forces( pos, vel, sc ):
         areaMassRatio = sc.area / sc.mass # m**2/kg
         dragDensity = atmosphere.density( (R - RE) ) # kg/m**3
         dragAccel = 0.5 * Cd * dragDensity * areaMassRatio * ((V*1000)**2)
+        
+        # Include some uncertainties in the drag model up to +/- 10%
+        dragAccel = dragAccel * np.random.normal(1.0, (1/10))
         acceleration -= dragAccel * ( vel / V ) / 1000
     
     # Include the addition of continuous thruster force if necessary.
