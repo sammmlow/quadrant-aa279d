@@ -27,15 +27,15 @@ sc2.chief = sc1 # ROEs and RTN states computed w.r.t. SC1
 sc2.forces['maneuvers'] = True # Important to switch this on.
 sc2.forces['j2'] = True # Enable J2 effects
 sc1.forces['j2'] = True # Enable J2 effects
-sc2.forces['drag'] = True # Enable J2 effects
-sc1.forces['drag'] = True # Enable J2 effects
+sc2.forces['drag'] = True # Enable drag effects
+sc1.forces['drag'] = True # Enable drag effects
 
 # Set the reference set of ROEs to track.
 rROE = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 rROE = np.array([sc2.da, sc2.dL, sc2.ex, sc2.ey, sc2.ix, sc2.iy])
 
 # Start the simulation here.
-timeNow, duration, timestep = 0.0, 3 * 86400.0, 60.0 # Time in seconds
+timeNow, duration, timestep = 0.0, 30.1 * 86400.0, 30.0 # Time in seconds
 k, samples = 0, int(duration / timestep) # Sample count and total samples
 
 # Matrix to store the data
@@ -78,22 +78,45 @@ def build_B(sc):
    
     return (1/(sc.n * sc.a)) * B
 
+# Reduced dimensional control input matrix (see Eq (7) in Steindorf, 2017)
+def build_reduced_B(sc):
+    
+    ec = sc.e
+    ex = ec*cos(sc.w)
+    ey = ec*sin(sc.w)
+    sfc = sin(sc.nu)
+    cfc = cos(sc.nu)
+    tic = tan(sc.i)
+    swfc = sin(sc.w + sc.nu)
+    cwfc = cos(sc.w + sc.nu)
+    eta = sqrt(1-sc.e**2)
+    B = np.zeros((5,2))
+    
+    B[0,0] = 2*(1+ec*cfc)/eta
+    B[1,0] = eta*((2+ec*cfc)*cwfc+ex)/(1+ec*cfc)
+    B[1,1] = eta*ey*swfc/(tic*(1+ec*cfc))
+    B[2,0] = eta*((2+ec*cfc)*swfc+ey)/(1+ec*cfc)
+    B[2,1] = -eta*ex*swfc/(tic*(1+ec*cfc))
+    B[3,1] = eta*cwfc/(1+ec*cfc)
+    B[4,1] = eta*swfc/(1+ec*cfc)
+   
+    return (1/(sc.n * sc.a)) * B
+
 # Gain matrix P for Lyapunov control. Takes as input current ROEs and the
 # reference ROEs. Negates the elements pertaining to dL (2nd ROE element).
-def build_P(N, K, ROE, rROE):
+def build_P(N, K, ROE, rROE, sc):
     dROE = ROE - rROE
     phi_ip = np.arctan2(dROE[3], dROE[2])
     phi_op = np.arctan2(dROE[5], dROE[4])
-    phi_ip_sc = np.arctan2(ROE[3], ROE[2])
-    phi_op_sc = np.arctan2(ROE[5], ROE[4])
-    J = phi_ip_sc - phi_ip
-    H = phi_op_sc - phi_op
-    P = np.zeros((6,6))
+    phi = sc.M + sc.w
+    J = phi - phi_ip
+    H = phi - phi_op
+    P = np.zeros((5,5))
     P[0,0] = cos(J)**N
+    P[1,1] = cos(J)**N
     P[2,2] = cos(J)**N
-    P[3,3] = cos(J)**N
+    P[3,3] = cos(H)**N
     P[4,4] = cos(H)**N
-    P[5,5] = cos(H)**N
     return K * P
     
 
@@ -111,26 +134,29 @@ while timeNow < duration:
     A = build_A(sc1)
     
     # Compute the control matrix B.
-    B = build_B(sc1)
+    # B = build_B(sc1)
+    B_reduced = build_reduced_B(sc1)
     
     # Build the gain matrix.
-    # P = build_P(32, 0.00002, ROE, rROE)
-    P = 0.0002 * np.eye(6)
+    P = build_P(20, 0.001, ROE, rROE, sc1)
+    # P = 0.0001 * np.eye(6) # Uncomment out to use the dumb control version
     
     # Compute control input. For now assume desired ROE is zero (rendezvous).
     dROE = ROE - rROE
-    u = -1 * pinv(B) @ ((A @ dROE) + (P @ dROE))
-    # u = np.zeros(3)
+    # u = -1 * pinv(B) @ ((A @ dROE) + (P @ dROE))
+    dROE_reduced = np.array([dROE[0], dROE[2], dROE[3], dROE[4], dROE[5]])
+    u_reduced = -1 * pinv(B_reduced) @ (P @ dROE_reduced)
+    u_reduced = np.append([0], u_reduced)
     
     # Apply the control maneuver to SC2.
-    sc2.set_thruster_acceleration( u )
+    sc2.set_thruster_acceleration( u_reduced )
     
     # Finally, the chief itself needs to be propagated (in absolute motion)
     sc1.propagate_perturbed(timestep, timestep)
     sc2.propagate_perturbed(timestep, timestep)
 
     # Update delta-V cost incurred, current time, and sample count.
-    total_deltaV += norm(u) * timestep
+    total_deltaV += norm( u_reduced ) * timestep
     timeNow += timestep
     k += 1
     
