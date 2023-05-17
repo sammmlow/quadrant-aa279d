@@ -32,9 +32,10 @@ sc1.forces['drag'] = True # Enable J2 effects
 
 # Set the reference set of ROEs to track.
 rROE = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+rROE = np.array([sc2.da, sc2.dL, sc2.ex, sc2.ey, sc2.ix, sc2.iy])
 
 # Start the simulation here.
-timeNow, duration, timestep = 0.0, 7 * 86400.0, 60.0 # Time in seconds
+timeNow, duration, timestep = 0.0, 3 * 86400.0, 60.0 # Time in seconds
 k, samples = 0, int(duration / timestep) # Sample count and total samples
 
 # Matrix to store the data
@@ -46,7 +47,7 @@ total_deltaV = 0.0
 # Keplerian plant matrix.
 def build_A(sc):
     A = np.zeros((6,6))
-    A[1,0] = sc1.n
+    A[1,0] = 1.5 * sc1.n
     return A
 
 # Control input matrix from GVEs (see Eq (4) in Steindorf, 2017)
@@ -113,11 +114,13 @@ while timeNow < duration:
     B = build_B(sc1)
     
     # Build the gain matrix.
-    P = build_P(32, 0.00002, ROE, rROE)
+    # P = build_P(32, 0.00002, ROE, rROE)
+    P = 0.0002 * np.eye(6)
     
     # Compute control input. For now assume desired ROE is zero (rendezvous).
-    # u = -1 * pinv(B) @ ((A @ ROE) + (P @ (ROE - rROE)))
-    u = np.zeros(3)
+    dROE = ROE - rROE
+    u = -1 * pinv(B) @ ((A @ dROE) + (P @ dROE))
+    # u = np.zeros(3)
     
     # Apply the control maneuver to SC2.
     sc2.set_thruster_acceleration( u )
@@ -133,10 +136,11 @@ while timeNow < duration:
     
 # Plot the full trajectory below, with chief as a quiver triad.
 plt.close('all')
-
 axisLimit = 1.0 # km
+ctime = np.arange(len(roe_history[:,1])) * (timestep / 86400)
+
 fig1 = plt.figure(1).add_subplot(projection='3d')
-fig1.plot(state_history[:,1], state_history[:,2], state_history[:,0])
+sc = fig1.scatter(state_history[:,1], state_history[:,2], state_history[:,0], s=4, c = ctime, alpha = 0.25)
 fig1.quiver(0,0,0,1,0,0, length = axisLimit / 5, color = 'g', arrow_length_ratio = 0.3 )
 fig1.quiver(0,0,0,0,1,0, length = axisLimit / 5, color = 'g', arrow_length_ratio = 0.3 )
 fig1.quiver(0,0,0,0,0,1, length = axisLimit / 5, color = 'g', arrow_length_ratio = 0.3 )
@@ -145,31 +149,44 @@ fig1.grid()
 fig1.set_xlabel('T [km]')
 fig1.set_ylabel('N [km]')
 fig1.set_zlabel('R [km]')
+plt.colorbar(sc)
 
 # Plot the evolution of ROE plots below.
 plt.figure(2)
 plt.title('Evolution of Quasi-Nonsingular ROEs')
+
 plt.subplot(1, 3, 1)
-plt.plot(roe_history[:,1], roe_history[:,0])
+plt.scatter(roe_history[:,1], roe_history[:,0], c = ctime, alpha = 0.25)
 plt.show()
-plt.scatter([rROE[1]], [rROE[0]], c='k')
+desiredROE12 = plt.scatter([rROE[1]], [rROE[0]], c='k', label='Reference')
 plt.xlabel(r'$\delta \lambda$')
 plt.ylabel(r'$\delta a$')
 plt.grid()
+plt.legend(handles=[desiredROE12])
+# plt.hlines(0, -1.0, 1.0, colors='k')
+# plt.vlines(0, -1.0, 1.0, colors='k')
+
 plt.subplot(1, 3, 2)
-plt.plot(roe_history[:,2], roe_history[:,3])
+plt.scatter(roe_history[:,2], roe_history[:,3], c = ctime, alpha = 0.25)
 plt.show()
-plt.scatter([rROE[2]], [rROE[3]], c='k')
+desiredROE34 = plt.scatter([rROE[2]], [rROE[3]], c='k', label='Reference')
 plt.xlabel(r'$\delta e_x$')
 plt.ylabel(r'$\delta e_y$')
 plt.grid()
+plt.legend(handles=[desiredROE34])
+# plt.hlines(0, -1.0, 1.0, colors='k')
+# plt.vlines(0, -1.0, 1.0, colors='k')
+
 plt.subplot(1, 3, 3)
-plt.plot(roe_history[:,4], roe_history[:,5])
+plt.scatter(roe_history[:,4], roe_history[:,5], c = ctime, alpha = 0.25)
 plt.show()
-plt.scatter([rROE[4]], [rROE[5]], c='k')
+desiredROE56 = plt.scatter([rROE[4]], [rROE[5]], c='k', label='Reference')
 plt.xlabel(r'$\delta i_x$')
 plt.ylabel(r'$\delta i_y$')
 plt.grid()
+plt.legend(handles=[desiredROE56])
+# plt.hlines(0, -1.0, 1.0, colors='k')
+# plt.vlines(0, -1.0, 1.0, colors='k')
 
 # Plot the total DV consumption.
 timeAxis = np.linspace(0, duration, samples)
