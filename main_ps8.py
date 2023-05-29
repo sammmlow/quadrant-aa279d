@@ -248,7 +248,7 @@ P = 1000 * np.eye(6) # Filter prior distribution covariance
 
 # Setup the process and measurement noise
 Q = 0.001 * np.eye(6)
-R = 5;
+R = 0.005;
 
 # Matrices to record measured and true state history
 xt_history = np.zeros((6, samples)); # Truth
@@ -321,8 +321,14 @@ stdev = np.sqrt(P_history)
 
 fig, (ax1, ax2, ax3) = plt.subplots(3)
 ax1.plot( timeAxis, xt_history[0,:] - x_history[0,:])
+ax1.fill_between( timeAxis, stdev[0,:], -stdev[0,:], alpha=0.2 )
+ax1.set_ylim(-2*R, 2*R)
 ax1.grid()
 ax2.plot( timeAxis, xt_history[1,:] - x_history[1,:])
+ax2.fill_between( timeAxis, stdev[1,:], -stdev[1,:], alpha=0.2 )
+ax2.set_ylim(-2*R, 2*R)
 ax2.grid()
 ax3.plot( timeAxis, xt_history[2,:] - x_history[2,:])
+ax3.fill_between( timeAxis, stdev[2,:], -stdev[2,:], alpha=0.2 )
+ax3.set_ylim(-2*R, 2*R)
 ax3.grid()
