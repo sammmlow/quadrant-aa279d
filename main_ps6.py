@@ -30,6 +30,9 @@ sc1.forces['j2'] = True # Enable J2 effects
 sc2.forces['drag'] = True # Enable drag effects
 sc1.forces['drag'] = True # Enable drag effects
 
+# Set the highest possible thrust output (absolute value in m/s^2).
+u_max = np.array([1E-7, 1E-7, 1E-7]) 
+
 # Set the reference set of ROEs to track.
 rROE = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 rROE = np.array([sc2.da, sc2.dL, sc2.ex, sc2.ey, sc2.ix, sc2.iy])
@@ -138,7 +141,7 @@ while timeNow < duration:
     B_reduced = build_reduced_B(sc1)
     
     # Build the gain matrix.
-    P = build_P(20, 0.001, ROE, rROE, sc1)
+    P = build_P(100, 0.001, ROE, rROE, sc1)
     # P = 0.0001 * np.eye(6) # Uncomment out to use the dumb control version
     
     # Compute control input. For now assume desired ROE is zero (rendezvous).
@@ -148,8 +151,13 @@ while timeNow < duration:
     u_reduced = -1 * pinv(B_reduced) @ (P @ dROE_reduced)
     u_reduced = np.append([0], u_reduced)
     
+    # Apply a maximum threshold constraint on the thrust.
+    u_sign = np.sign(u_reduced)
+    u_cutoff = np.minimum( np.abs(u_reduced), u_max )
+    u_cutoff = u_cutoff * u_sign
+    
     # Apply the control maneuver to SC2.
-    sc2.set_thruster_acceleration( u_reduced )
+    sc2.set_thruster_acceleration( u_cutoff )
     
     # Finally, the chief itself needs to be propagated (in absolute motion)
     sc1.propagate_perturbed(timestep, timestep)
