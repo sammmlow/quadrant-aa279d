@@ -64,6 +64,18 @@ def rv_eci_to_rtn(rv_c_eci, rv_cd_eci):
     v_rtn = matrix_eci2rtn @ rhoDot - np.cross(omega, r_rtn)
     return r_rtn, v_rtn
 
+def rv_rtn_to_eci(rv_c_eci, r_rtn, v_rtn):
+    r = rv_c_eci[0:3]
+    v = rv_c_eci[3:6]
+    matrix_eci2rtn = get_hill_frame(r, v)
+    nuDot = norm(np.cross(r, v)) / (norm(r)**2)
+    omega = np.array([0.0, 0.0, nuDot])
+    rho = np.transpose(matrix_eci2rtn) @ r_rtn
+    rhoDot = np.transpose(matrix_eci2rtn) @ (v_rtn + np.cross(omega, r_rtn))
+    rv_cd_eci = np.zeros(6)
+    rv_cd_eci[0:3] = rho
+    rv_cd_eci[3:6] = rhoDot
+    return rv_cd_eci # This returns the RELATIVE state in ECI
 
 # Define an acceleration function to compute RTN force vectors in RTN basis
 # and as seen in RTN frame. Input vectors are also RTN basis with time

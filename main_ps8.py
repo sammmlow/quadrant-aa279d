@@ -63,15 +63,6 @@ GPS_ANOM = [ -86.960177, -144.505126, -152.714424,   13.494215,   61.374757,
               40.680892,  147.604237,   43.801439, -129.846039, -157.112496,
               78.628936]
 
-# Initialize both chief and deputy.
-sc1_elements = [6918.14, 0.00001, 97.59760, 0.000000, -109.33800,   0.00827]
-sc2_elements = [6918.14, 0.00722, 97.5976, 134.94389, -108.5025, -134.71026] 
-sc1 = spacecraft.Spacecraft( elements = sc1_elements )
-sc2 = spacecraft.Spacecraft( elements = sc2_elements )
-
-# Set the chief of the spacecraft. Enable maneuvers for SC2.
-sc2.chief = sc1 # ROEs and RTN states computed w.r.t. SC1
-
 # Initialize GPS satellite osculating Keplerian elements
 gps01oe = [GPS_SMAX, GPS_ECCN, GPS_INCL, GPS_RAAN[ 0], GPS_ARGP[ 0], GPS_ANOM[ 0]]
 gps02oe = [GPS_SMAX, GPS_ECCN, GPS_INCL, GPS_RAAN[ 1], GPS_ARGP[ 1], GPS_ANOM[ 1]]
@@ -206,19 +197,6 @@ def compute_aer(pos0, pos1):
 # Computes the state transition matrix for absolute orbital motion
 # It requires rough knowledge on the norm of the S/C pose
 
-# def compute_A(R):
-#     # First, get the continuous state space plant matrix
-#     GM = 398600.4418  # G * Earth Mass (km**3/s**2)
-#     F = -GM/(R**3) # Two-body force
-#     A11 = np.zeros((3,3))
-#     A12 = np.eye(3)
-#     A21 = F * np.eye(3)
-#     A22 = np.zeros((3,3))
-#     A1 = np.concatenate((A11, A12), axis=1)
-#     A2 = np.concatenate((A21, A22), axis=1)
-#     A = np.concatenate((A1, A2), axis=0)
-#     return expm(A)
-
 def compute_A(dt, R):
     GM = 398600.4418
     F = -(GM / (R**3)) * dt
@@ -253,6 +231,16 @@ def compute_Cdot(pos_rcv, pos_gps, vel_rcv, vel_gps):
     Cdot = np.array([ prx, pry, prz, pvx, pvy, pvz ])
     return Cdot
 
+# Computes the Jacobian of a single TDOA measurement
+def compute_C_tdoa(pos_rcv2, pos_rcv1, pos_tgt):
+    rho2 = pos_rcv2 - pos_tgt
+    rho1 = pos_rcv1 - pos_tgt
+    dx = rho1[0]/norm(rho1) - rho2[0]/norm(rho2)
+    dy = rho1[1]/norm(rho1) - rho2[1]/norm(rho2)
+    dz = rho1[2]/norm(rho1) - rho2[2]/norm(rho2)
+    C_tdoa = np.array([ dx, dy, dz ])
+    return C_tdoa
+
 ##############################################################################
 ##############################################################################
 ###                                                                        ###
@@ -261,8 +249,22 @@ def compute_Cdot(pos_rcv, pos_gps, vel_rcv, vel_gps):
 ##############################################################################
 ##############################################################################
 
+# Number of states
+N = 21
+
+# Generate SC elements for the formation.
 sc1_elements = [6918.14, 0.00001, 97.59760, 0.000000, -109.33800,   0.00827]
+sc2_elements = [6918.14, 0.00722, 97.59760, 134.94389, -108.5025, -134.7102]
+sc3_elements = [6918.14, 0.00723, 98.42577,  44.94400, -109.3380,  -44.8442]
+
+# Generate the actual spacecraft objects.
 sc1 = spacecraft.Spacecraft( elements = sc1_elements )
+sc2 = spacecraft.Spacecraft( elements = sc2_elements )
+sc3 = spacecraft.Spacecraft( elements = sc3_elements )
+
+# Initialize the target coordinates.
+tgtX, tgtY, tgtZ = 3682, 3682, 3682
+pos_tgt = np.array([ 3682, 3682, 3682 ])
 
 # Setup the simulation parameters
 dt = 10;
@@ -270,21 +272,32 @@ duration = 6000;
 samples = math.floor(duration / dt);
 
 # Setup the initial state and initial (prior) distribution
-x = np.array([ sc1.px, sc1.py, sc1.pz, sc1.vx, sc1.vy, sc1.vz ])
-P = 1000 * np.eye(6) # Filter prior distribution covariance
+x = np.array([ sc1.px, sc1.py, sc1.pz, sc1.vx, sc1.vy, sc1.vz,
+               sc2.px, sc2.py, sc2.pz, sc2.vx, sc2.vy, sc2.vz,
+               sc3.px, sc3.py, sc3.pz, sc3.vx, sc3.vy, sc3.vz,
+               tgtX, tgtY, tgtZ ])
+
+P = 1000 * np.eye(N) # Filter prior distribution covariance
 
 # Corrupt the initial state estimate 0.01% or about 1km
-x = x * np.random.normal(1.0, 0.0001, 6)
+x = x * np.random.normal(1.0, 0.0001, N)
 
 # Setup the process and measurement noise
-Q = np.diag([dt/100, dt/100, dt/100, dt/100000, dt/100000, dt/100000])
-R = 0.005; # 5m/s
-Rdot = 0.000005; # 5mm/s
+Qr, Qv, Qt = dt/100, dt/100000, dt/1000000
+
+Q = np.diag([Qr,Qr,Qr,Qv,Qv,Qv,
+             Qr,Qr,Qr,Qv,Qv,Qv,
+             Qr,Qr,Qr,Qv,Qv,Qv,
+             Qt,Qt,Qt])
+
+R = 5E-3; # 5 meters
+Rdot = 5E-7; # 5 mm/s
+Rtgt = sqrt(2) * R # meters
 
 # Matrices to record measured and true state history
-xt_history = np.zeros((6, samples)); # Truth
-x_history = np.zeros((6, samples));  # Filter mean
-P_history = np.zeros((6, samples));  # Filter variance
+xt_history = np.zeros((N, samples)); # Truth
+x_history = np.zeros((N, samples));  # Filter mean
+P_history = np.zeros((N, samples));  # Filter variance
 k = 1;                               # Counter
 
 # Set the elevation angle masking (default 5 degrees)
@@ -303,28 +316,54 @@ for k in range(samples):
 
     # Record states
     x_history[:,k] = x
-    P_history[:,k] = [P[0,0], P[1,1], P[2,2], P[3,3], P[4,4], P[5,5]]
-    xt_history[:,k] = [sc1.px, sc1.py, sc1.pz, sc1.vx, sc1.vy, sc1.vz]
+    P_history[:,k] = np.diagonal(P)
+    xt_history[:,k] = [ sc1.px, sc1.py, sc1.pz, sc1.vx, sc1.vy, sc1.vz,
+                        sc2.px, sc2.py, sc2.pz, sc2.vx, sc2.vy, sc2.vz,
+                        sc3.px, sc3.py, sc3.pz, sc3.vx, sc3.vy, sc3.vz,
+                        tgtX, tgtY, tgtZ ]
 
     # Propagate the true states of all spacecraft using RK4 propagator
     sc1.propagate_orbit(dt)
+    sc2.propagate_orbit(dt)
+    sc3.propagate_orbit(dt)
     for gps in gps_constellation:
         gps.propagate_orbit(dt)
         
+    # TODO: UPDATE THE ECEF/ECI STATE OF THE TARGET
+        
+    # Build the block diagonal state transition matrix here
+    I3 = np.eye(3)
+    Z6 = np.zeros((6,6))
+    Z36 = np.zeros((3,6))
+    Z63 = np.zeros((6,3))
+    A1 = compute_A( dt, norm(x[0:3]) )
+    A2 = compute_A( dt, norm(x[6:9]) )
+    A3 = compute_A( dt, norm(x[12:15]) )
+    A4 = I3 # Earth rotation in ECI
+    A = np.block([[A1,  Z6,  Z6,  Z63],
+                  [Z6,  A2,  Z6,  Z63],
+                  [Z6,  Z6,  A3,  Z63],
+                  [Z36, Z36, Z36, A4 ]])
+    
     # Propagate the filter with the time update here.
-    A = compute_A( dt, norm(x[0:3]) )
-    x = A @ x # Add the linearized control mapping here?
+    x = A @ x
     P = A @ P @ np.transpose(A) + Q
         
     # Check which GPS satellites the SC can currently see. If it can
     # detect and receive range, compute a measurement update.
     for prn in prns:
+        
+        # Fetch GPS ephemeris and corrupt it with some noise
+        pn, vn = 0.0015, 0.0000015 # units in km
         gps = gps_constellation[prn-1]
+        pos_gps = np.array([gps.px, gps.py, gps.pz]) + np.random.normal(0,pn,3)
+        vel_gps = np.array([gps.vx, gps.vy, gps.vz]) + np.random.normal(0,vn,3)
+        
+        # For SC1:
         pos_sc1 = np.array([sc1.px, sc1.py, sc1.pz])
-        pos_gps = np.array([gps.px, gps.py, gps.pz])
-        aer = compute_aer(pos_sc1, pos_gps)
-        elev = aer[1]
-        if elev > elevMask:
+        aer1 = compute_aer(pos_sc1, pos_gps)
+        elev1 = aer1[1]
+        if elev1 > elevMask:
             
             # Observed and computed pseudorange measurement
             y = norm(pos_sc1 - pos_gps) + np.random.normal(0, R)
@@ -332,6 +371,7 @@ for k in range(samples):
             
             # Compute Jacobian and Kalman gain for position update
             C = compute_C( y, pos_sc1, pos_gps )
+            C = np.block([ C, np.zeros((1,N-6)) ])[0]
             CT = np.transpose(C)
             K = P @ CT / ((C @ P @ CT) + R)
             x = x + (K * (y-yc))
@@ -339,7 +379,6 @@ for k in range(samples):
             
             # Observed and computed Doppler measurement
             vel_sc1 = np.array([sc1.vx, sc1.vy, sc1.vz])
-            vel_gps = np.array([gps.vx, gps.vy, gps.vz])
             dvel = vel_gps - vel_sc1
             los = (pos_gps - pos_sc1) / norm(pos_gps - pos_sc1)
             losc = (pos_gps - x[0:3]) / norm(pos_gps - x[0:3])
@@ -348,10 +387,111 @@ for k in range(samples):
             
             # Compute Jacobian and Kalman gain for velocity update
             Cdot = compute_Cdot( x[0:3], pos_gps, x[3:6], vel_gps )
+            Cdot = np.block([ Cdot, np.zeros((1,N-6))])[0]
             CdotT = np.transpose(Cdot)
             K = P @ CdotT / ((Cdot @ P @ CdotT) + Rdot)
             x = x + (K * (ydot-ycdot))
             P = P - (np.outer(K,Cdot) @ P)
+        
+        # For SC2:
+        pos_sc2 = np.array([sc2.px, sc2.py, sc2.pz])
+        aer2 = compute_aer(pos_sc2, pos_gps)
+        elev2 = aer2[1]
+        if elev2 > elevMask:
+            
+            # Observed and computed pseudorange measurement
+            y = norm(pos_sc2 - pos_gps) + np.random.normal(0, R)
+            yc = norm(x[6:9] - pos_gps)
+            
+            # Compute Jacobian and Kalman gain for position update
+            C = compute_C( y, pos_sc2, pos_gps )
+            C = np.block([ np.zeros((1,6)), C, np.zeros((1,N-12)) ])[0]
+            CT = np.transpose(C)
+            K = P @ CT / ((C @ P @ CT) + R)
+            x = x + (K * (y-yc))
+            P = P - (np.outer(K,C) @ P)
+            
+            # Observed and computed Doppler measurement
+            vel_sc2 = np.array([sc2.vx, sc2.vy, sc2.vz])
+            dvel = vel_gps - vel_sc2
+            los = (pos_gps - pos_sc2) / norm(pos_gps - pos_sc2)
+            losc = (pos_gps - x[6:9]) / norm(pos_gps - x[6:9])
+            ydot = np.dot(dvel, los)
+            ycdot = np.dot(vel_gps - x[9:12], losc)
+            
+            # Compute Jacobian and Kalman gain for velocity update
+            Cdot = compute_Cdot( x[6:9], pos_gps, x[9:12], vel_gps )
+            Cdot = np.block([ np.zeros((1,6)), Cdot, np.zeros((1,N-12)) ])[0]
+            CdotT = np.transpose(Cdot)
+            K = P @ CdotT / ((Cdot @ P @ CdotT) + Rdot)
+            x = x + (K * (ydot-ycdot))
+            P = P - (np.outer(K,Cdot) @ P)
+        
+        # For SC3:
+        pos_sc3 = np.array([sc3.px, sc3.py, sc3.pz])
+        aer3 = compute_aer(pos_sc3, pos_gps)
+        elev3 = aer3[1]
+        if elev3 > elevMask:
+            
+            # Observed and computed pseudorange measurement
+            y = norm(pos_sc3 - pos_gps) + np.random.normal(0, R)
+            yc = norm(x[12:15] - pos_gps)
+            
+            # Compute Jacobian and Kalman gain for position update
+            C = compute_C( y, pos_sc3, pos_gps )
+            C = np.block([ np.zeros((1,12)), C, np.zeros((1,N-18)) ])[0]
+            CT = np.transpose(C)
+            K = P @ CT / ((C @ P @ CT) + R)
+            x = x + (K * (y-yc))
+            P = P - (np.outer(K,C) @ P)
+            
+            # Observed and computed Doppler measurement
+            vel_sc3 = np.array([sc3.vx, sc3.vy, sc3.vz])
+            dvel = vel_gps - vel_sc3
+            los = (pos_gps - pos_sc3) / norm(pos_gps - pos_sc3)
+            losc = (pos_gps - x[12:15]) / norm(pos_gps - x[12:15])
+            ydot = np.dot(dvel, los)
+            ycdot = np.dot(vel_gps - x[15:18], losc)
+            
+            # Compute Jacobian and Kalman gain for velocity update
+            Cdot = compute_Cdot( x[12:15], pos_gps, x[15:18], vel_gps )
+            Cdot = np.block([ np.zeros((1,12)), Cdot, np.zeros((1,N-18)) ])[0]
+            CdotT = np.transpose(Cdot)
+            K = P @ CdotT / ((Cdot @ P @ CdotT) + Rdot)
+            x = x + (K * (ydot-ycdot))
+            P = P - (np.outer(K,Cdot) @ P)
+            
+    # TODO: NEED TO GENERATE ECI TARGET STATE FROM ECEF
+    
+    # Generate actual observed TDOA measurements.
+    y_tdoa_21 = norm(pos_sc2 - pos_tgt) - norm(pos_sc1 - pos_tgt) + np.random.normal(0, R)
+    y_tdoa_32 = norm(pos_sc3 - pos_tgt) - norm(pos_sc2 - pos_tgt) + np.random.normal(0, R)
+    
+    # Get computed TDOA measurements
+    state_rcv1 = x[0:3]
+    state_rcv2 = x[6:9]
+    state_rcv3 = x[12:15]
+    state_tgt = x[18:21]
+    yc_tdoa_21 = norm(state_rcv2 - state_tgt) - norm(state_rcv1 - state_tgt)
+    yc_tdoa_32 = norm(state_rcv3 - state_tgt) - norm(state_rcv2 - state_tgt)
+    
+    # For the actual target, perform TDOA measurement update between SC1 & 2
+    C_tdoa_21 = compute_C_tdoa(state_rcv2, state_rcv1, state_tgt)
+    C_tdoa_21 = np.block([ np.zeros((1,18)), C_tdoa_21 ])[0]
+    C_tdoa_21T = np.transpose(C_tdoa_21)
+    C_tdoa_32 = compute_C_tdoa(state_rcv3, state_rcv2, state_tgt)
+    C_tdoa_32 = np.block([ np.zeros((1,18)), C_tdoa_32 ])[0]
+    C_tdoa_32T = np.transpose(C_tdoa_32)
+    
+    # For the actual target, perform TDOA measurement update between SC1 & 2
+    K = P @ C_tdoa_32T / ((C_tdoa_32 @ P @ C_tdoa_32T) + R)
+    x = x + (K * (y_tdoa_32 - yc_tdoa_32))
+    P = P - (np.outer(K, C_tdoa_32) @ P)
+    
+    # For the actual target, perform TDOA measurement update between SC2 & 3
+    K = P @ C_tdoa_32T / ((C_tdoa_32 @ P @ C_tdoa_32T) + R)
+    x = x + (K * (y_tdoa_32 - yc_tdoa_32))
+    P = P - (np.outer(K, C_tdoa_32) @ P)
             
 ##############################################################################
 ##############################################################################
@@ -368,12 +508,12 @@ x_history  = x_history * 1000
 xt_history = xt_history * 1000
 P_history = P_history * 1000**2
 
-# Position ECI
+# SC1: Position ECI
 
 timeAxis = np.linspace( 0, duration, samples)
 stdev = np.sqrt(P_history)
 
-fig123, (ax1, ax2, ax3) = plt.subplots(3)
+figA, (ax1, ax2, ax3) = plt.subplots(3)
 ax1.plot( timeAxis, xt_history[0,:] - x_history[0,:])
 ax1.fill_between( timeAxis, stdev[0,:], -stdev[0,:], alpha=0.2 )
 ax1.set_ylim(-20*1000*R, 20*1000*R)
@@ -388,9 +528,9 @@ ax3.set_ylim(-20*1000*R, 20*1000*R)
 ax3.set_xlabel('Time [seconds]')
 ax3.grid()
 
-# Velocity ECI
+# SC1: Velocity ECI
 
-fig456, (ax4, ax5, ax6) = plt.subplots(3)
+figB, (ax4, ax5, ax6) = plt.subplots(3)
 ax4.plot( timeAxis, xt_history[3,:] - x_history[3,:])
 ax4.fill_between( timeAxis, stdev[3,:], -stdev[3,:], alpha=0.2 )
 ax4.set_ylim(-20*1000*Rdot, 20*1000*Rdot)
@@ -404,3 +544,88 @@ ax6.fill_between( timeAxis, stdev[5,:], -stdev[5,:], alpha=0.2 )
 ax6.set_ylim(-20*1000*Rdot, 20*1000*Rdot)
 ax6.set_xlabel('Time [seconds]')
 ax6.grid()
+
+# SC2: Position ECI
+
+figC, (ax7, ax8, ax9) = plt.subplots(3)
+ax7.plot( timeAxis, xt_history[6,:] - x_history[6,:])
+ax7.fill_between( timeAxis, stdev[6,:], -stdev[6,:], alpha=0.2 )
+ax7.set_ylim(-20*1000*R, 20*1000*R)
+ax7.grid()
+ax8.plot( timeAxis, xt_history[7,:] - x_history[7,:])
+ax8.fill_between( timeAxis, stdev[7,:], -stdev[7,:], alpha=0.2 )
+ax8.set_ylim(-20*1000*R, 20*1000*R)
+ax8.grid()
+ax9.plot( timeAxis, xt_history[8,:] - x_history[8,:])
+ax9.fill_between( timeAxis, stdev[8,:], -stdev[8,:], alpha=0.2 )
+ax9.set_ylim(-20*1000*R, 20*1000*R)
+ax9.set_xlabel('Time [seconds]')
+ax9.grid()
+
+# SC2: Velocity ECI
+
+figD, (ax10, ax11, ax12) = plt.subplots(3)
+ax10.plot( timeAxis, xt_history[9,:] - x_history[9,:])
+ax10.fill_between( timeAxis, stdev[9,:], -stdev[9,:], alpha=0.2 )
+ax10.set_ylim(-20*1000*Rdot, 20*1000*Rdot)
+ax10.grid()
+ax11.plot( timeAxis, xt_history[10,:] - x_history[10,:])
+ax11.fill_between( timeAxis, stdev[10,:], -stdev[10,:], alpha=0.2 )
+ax11.set_ylim(-20*1000*Rdot, 20*1000*Rdot)
+ax11.grid()
+ax12.plot( timeAxis, xt_history[11,:] - x_history[11,:])
+ax12.fill_between( timeAxis, stdev[11,:], -stdev[11,:], alpha=0.2 )
+ax12.set_ylim(-20*1000*Rdot, 20*1000*Rdot)
+ax12.set_xlabel('Time [seconds]')
+ax12.grid()
+
+# SC3: Position ECI
+
+figE, (ax13, ax14, ax15) = plt.subplots(3)
+ax13.plot( timeAxis, xt_history[12,:] - x_history[12,:])
+ax13.fill_between( timeAxis, stdev[12,:], -stdev[12,:], alpha=0.2 )
+ax13.set_ylim(-20*1000*R, 20*1000*R)
+ax13.grid()
+ax14.plot( timeAxis, xt_history[13,:] - x_history[13,:])
+ax14.fill_between( timeAxis, stdev[13,:], -stdev[13,:], alpha=0.2 )
+ax14.set_ylim(-20*1000*R, 20*1000*R)
+ax14.grid()
+ax15.plot( timeAxis, xt_history[14,:] - x_history[14,:])
+ax15.fill_between( timeAxis, stdev[14,:], -stdev[14,:], alpha=0.2 )
+ax15.set_ylim(-20*1000*R, 20*1000*R)
+ax15.set_xlabel('Time [seconds]')
+ax15.grid()
+
+# SC3: Velocity ECI
+
+figF, (ax16, ax17, ax18) = plt.subplots(3)
+ax16.plot( timeAxis, xt_history[15,:] - x_history[15,:])
+ax16.fill_between( timeAxis, stdev[15,:], -stdev[15,:], alpha=0.2 )
+ax16.set_ylim(-20*1000*Rdot, 20*1000*Rdot)
+ax16.grid()
+ax17.plot( timeAxis, xt_history[16,:] - x_history[16,:])
+ax17.fill_between( timeAxis, stdev[16,:], -stdev[16,:], alpha=0.2 )
+ax17.set_ylim(-20*1000*Rdot, 20*1000*Rdot)
+ax17.grid()
+ax18.plot( timeAxis, xt_history[17,:] - x_history[17,:])
+ax18.fill_between( timeAxis, stdev[17,:], -stdev[17,:], alpha=0.2 )
+ax18.set_ylim(-20*1000*Rdot, 20*1000*Rdot)
+ax18.set_xlabel('Time [seconds]')
+ax18.grid()
+
+# Target: ECI
+
+figG, (ax19, ax20, ax21) = plt.subplots(3)
+ax19.plot( timeAxis, xt_history[18,:] - x_history[18,:])
+ax19.fill_between( timeAxis, stdev[18,:], -stdev[18,:], alpha=0.2 )
+ax19.set_ylim(-200*1000*R, 200*1000*R)
+ax19.grid()
+ax20.plot( timeAxis, xt_history[19,:] - x_history[19,:])
+ax20.fill_between( timeAxis, stdev[19,:], -stdev[19,:], alpha=0.2 )
+ax20.set_ylim(-200*1000*R, 200*1000*R)
+ax20.grid()
+ax21.plot( timeAxis, xt_history[20,:] - x_history[20,:])
+ax21.fill_between( timeAxis, stdev[20,:], -stdev[20,:], alpha=0.2 )
+ax21.set_ylim(-200*1000*R, 200*1000*R)
+ax21.set_xlabel('Time [seconds]')
+ax21.grid()
