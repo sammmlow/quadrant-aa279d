@@ -441,7 +441,7 @@ class Spacecraft():
             self.__dict__[key] = (((value * D2R) + PI) % (2*PI)) - PI
             self.M = R2D * (((anomaly.V2M((value*D2R),self.e)+PI)%(2*PI))-PI)
         
-        # __setattr__ for 'mu' attribute. Mean argument of latitude (rad).
+        # __setattr__ for 'mu' attribute. True argument of latitude (rad).
         if key == 'mu':
             self.__dict__[key] = ((value + PI) % (2*PI)) - PI
             self.nu = R2D * ((((value * D2R) - self.w + PI) % (2*PI)) - PI)
@@ -452,6 +452,7 @@ class Spacecraft():
             self.__dict__[key] = value
             self.__dict__['a'] = (self.GM / value**2)**(1/3)
             self.__dict__['T'] = 2 * PI / value
+            self._update_states()
         
         # __setattr__ for 'T' attribute. Keplerian period (s). Constrained by
         # semi-major axis value (km).
@@ -459,6 +460,7 @@ class Spacecraft():
             self.__dict__[key] = value
             self.__dict__['n'] = 2 * PI / value
             self.__dict__['a'] = (self.GM * (value / (2*PI))**2 )**(1/3)
+            self._update_states()
             
         # __setattr__ for 'chief' attribute. Updates relative states and ROEs.
         # Need to check if the type is that of a `spacecraft` object.
@@ -718,7 +720,8 @@ class Spacecraft():
             self.__dict__['vR'] = v_rtn[0]
             self.__dict__['vT'] = v_rtn[1]
             self.__dict__['vN'] = v_rtn[2]
-            
+    
+    # TODO: ROEs and RTN needs to be updated whenever absolute motion is updated
     def update_relative_motion(self):
         self._update_elements_roe()
         self._update_states_rtn()

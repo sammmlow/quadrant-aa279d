@@ -16,12 +16,16 @@ from source import spacecraft
 
 # Initialize both chief and deputy.
 sc1_elements = [6918.14, 0.00001, 97.59760, 0.000000, -109.33800,   0.00827]
-sc2_elements = [6918.14, 0.00722, 97.5976, 134.94389, -108.5025, -134.71026] 
+sc2_elements = [6918.14, 0.00361, 97.5976, 134.88767, -108.92024, -134.76636] 
 sc1 = spacecraft.Spacecraft( elements = sc1_elements )
 sc2 = spacecraft.Spacecraft( elements = sc2_elements )
 
 # Set the chief of the spacecraft. Enable maneuvers for SC2.
 sc2.chief = sc1 # ROEs and RTN states computed w.r.t. SC1
+
+# Set the masses
+sc1.mass = 10.0
+sc2.mass = 10.0
 
 # Toggle forces on each spacecraft
 sc2.forces['maneuvers'] = True # Important to switch this on.
@@ -38,7 +42,7 @@ rROE = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 rROE = np.array([sc2.da, sc2.dL, sc2.ex, sc2.ey, sc2.ix, sc2.iy])
 
 # Start the simulation here.
-timeNow, duration, timestep = 0.0, 30.1 * 86400.0, 30.0 # Time in seconds
+timeNow, duration, timestep = 0.0, 30.1 * 86400.0, 60.0 # Time in seconds
 k, samples = 0, int(duration / timestep) # Sample count and total samples
 
 # Matrix to store the data
@@ -121,7 +125,11 @@ def build_P(N, K, ROE, rROE, sc):
     P[3,3] = cos(H)**N
     P[4,4] = cos(H)**N
     return K * P
-    
+
+# Set a timer for continuous control drift correction
+drift_flag = False
+drift_timer = 0    
+dv_lambda = 0.0001
 
 # In the loop, in order for the deputy to properly update its ROEs and RTN, 
 # the chief needs to be propagated first...
@@ -132,32 +140,78 @@ while timeNow < duration:
     roe_history[k,:] = ROE
     state_history[k,:] = [sc2.pR, sc2.pT, sc2.pN, sc2.vR, sc2.vT, sc2.vN]
     deltaV_history[k] = total_deltaV
-
-    # Compute the plant matrix A (time-varying for non-Keplerian case).
-    A = build_A(sc1)
-    
-    # Compute the control matrix B.
-    # B = build_B(sc1)
-    B_reduced = build_reduced_B(sc1)
-    
-    # Build the gain matrix.
-    P = build_P(100, 0.001, ROE, rROE, sc1)
-    # P = 0.0001 * np.eye(6) # Uncomment out to use the dumb control version
     
     # Compute control input. For now assume desired ROE is zero (rendezvous).
     dROE = ROE - rROE
-    # u = -1 * pinv(B) @ ((A @ dROE) + (P @ dROE))
-    dROE_reduced = np.array([dROE[0], dROE[2], dROE[3], dROE[4], dROE[5]])
-    u_reduced = -1 * pinv(B_reduced) @ (P @ dROE_reduced)
-    u_reduced = np.append([0], u_reduced)
     
-    # Apply a maximum threshold constraint on the thrust.
-    u_sign = np.sign(u_reduced)
-    u_cutoff = np.minimum( np.abs(u_reduced), u_max )
-    u_cutoff = u_cutoff * u_sign
+    # Nominal maintenance if not correcting for Keplerian drift
+    if drift_flag == False:
+
+        # Compute the plant matrix A (time-varying for non-Keplerian case).
+        A = build_A(sc1)
+        
+        # Compute the control matrix B.
+        # B = build_B(sc1)
+        B_reduced = build_reduced_B(sc1)
+        
+        # Build the gain matrix.
+        P = build_P(100, 0.001, ROE, rROE, sc1)
+        # P = 0.0001 * np.eye(6) # Uncomment out to use the dumb control version
+        
+        # u = -1 * pinv(B) @ ((A @ dROE) + (P @ dROE))
+        dROE_reduced = np.array([dROE[0], dROE[2], dROE[3], dROE[4], dROE[5]])
+        u_reduced = -1 * pinv(B_reduced) @ (P @ dROE_reduced)
+        u_reduced = np.append([0], u_reduced)
+        
+        # Apply a maximum threshold constraint on the thrust.
+        u_sign = np.sign(u_reduced)
+        u_cutoff = np.minimum( np.abs(u_reduced), u_max )
+        u_cutoff = u_cutoff * u_sign
+        
+        # Apply the control maneuver to SC2.
+        sc2.set_thruster_acceleration( u_cutoff )
+        
+    else:
+        sc2.set_thruster_acceleration( [0,0,0] )
     
-    # Apply the control maneuver to SC2.
-    sc2.set_thruster_acceleration( u_cutoff )
+    # Keplerian drift correction
+    if (abs(dROE[1]) > 0.002) or (drift_flag == True):
+        
+        # Flip the sign of the impulse bit if the phase is negative
+        if dROE[1] < 0:
+            dv_lambda = dv_lambda * (-1)
+        
+        # Apply the DV if it has not been applied yet
+        if drift_flag == False:
+            print("t = ", timeNow)
+            print("Starting drift correction!")
+            print("dROE = ", dROE, "dv = ", dv_lambda, '\n')
+            rtn2eci = np.transpose( sc2.get_hill_frame() )
+            dv = rtn2eci @ np.array([0, dv_lambda, 0])
+            sc2.vx = sc2.vx + dv[0]
+            sc2.vy = sc2.vy + dv[1]
+            sc2.vz = sc2.vz + dv[2]
+            drift_timer = sc2.chief.a * dROE[1] / (3 * dv_lambda)
+            total_deltaV += abs(dv_lambda)
+            drift_flag = True
+        
+        # Apply the anti DV once drift has been corrected
+        if (drift_timer <= 0) or (abs(dROE[1]) < 0.00075):
+            print("t = ", timeNow)
+            print("Completed drift correction!")
+            print("dROE = ", dROE, '\n')
+            rtn2eci = np.transpose( sc2.get_hill_frame() )
+            dv = rtn2eci @ np.array([0, -1*dv_lambda, 0])
+            sc2.vx = sc2.vx + dv[0]
+            sc2.vy = sc2.vy + dv[1]
+            sc2.vz = sc2.vz + dv[2]
+            drift_timer = 0
+            total_deltaV += abs(dv_lambda)
+            drift_flag = False
+            
+        else:
+            # print("Drifting... t = ", drift_timer, " flag = ", drift_flag)
+            drift_timer -= timestep
     
     # Finally, the chief itself needs to be propagated (in absolute motion)
     sc1.propagate_perturbed(timestep, timestep)

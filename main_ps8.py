@@ -197,7 +197,7 @@ def compute_aer(pos0, pos1):
 # Computes the state transition matrix for absolute orbital motion
 # It requires rough knowledge on the norm of the S/C pose
 
-def compute_A(dt, R):
+def build_filter_A(dt, R):
     GM = 398600.4418
     F = -(GM / (R**3)) * dt
     A = np.array([
@@ -263,13 +263,13 @@ sc2 = spacecraft.Spacecraft( elements = sc2_elements )
 sc3 = spacecraft.Spacecraft( elements = sc3_elements )
 
 # Initialize the target coordinates.
-tgtX, tgtY, tgtZ = 3682, 3682, 3682
-pos_tgt = np.array([ 3682, 3682, 3682 ])
+tgtX, tgtY, tgtZ = -2243.797, -5732.739, 1640.842
+pos_tgt = np.array([ -2243.797, -5732.739, 1640.842 ])
 
 # Setup the simulation parameters
-dt = 10;
-duration = 6000;
-samples = math.floor(duration / dt);
+timestep = 10;
+duration = 15000;
+samples = math.floor(duration / timestep);
 
 # Setup the initial state and initial (prior) distribution
 x = np.array([ sc1.px, sc1.py, sc1.pz, sc1.vx, sc1.vy, sc1.vz,
@@ -283,7 +283,7 @@ P = 1000 * np.eye(N) # Filter prior distribution covariance
 x = x * np.random.normal(1.0, 0.0001, N)
 
 # Setup the process and measurement noise
-Qr, Qv, Qt = dt/100, dt/100000, dt/1000000
+Qr, Qv, Qt = timestep/100, timestep/100000, timestep/10000
 
 Q = np.diag([Qr,Qr,Qr,Qv,Qv,Qv,
              Qr,Qr,Qr,Qv,Qv,Qv,
@@ -291,7 +291,7 @@ Q = np.diag([Qr,Qr,Qr,Qv,Qv,Qv,
              Qt,Qt,Qt])
 
 R = 5E-3; # 5 meters
-Rdot = 5E-7; # 5 mm/s
+Rdot = 1E-7; # 5 mm/s
 Rtgt = sqrt(2) * R # meters
 
 # Matrices to record measured and true state history
@@ -299,6 +299,9 @@ xt_history = np.zeros((N, samples)); # Truth
 x_history = np.zeros((N, samples));  # Filter mean
 P_history = np.zeros((N, samples));  # Filter variance
 k = 1;                               # Counter
+
+res_pre_history = np.zeros((2, samples));  # Prefit residuals
+res_pos_history = np.zeros((2, samples));  # Postfit residuals
 
 # Set the elevation angle masking (default 5 degrees)
 elevMask = np.deg2rad(5.0)
@@ -323,31 +326,44 @@ for k in range(samples):
                         tgtX, tgtY, tgtZ ]
 
     # Propagate the true states of all spacecraft using RK4 propagator
-    sc1.propagate_orbit(dt)
-    sc2.propagate_orbit(dt)
-    sc3.propagate_orbit(dt)
+    sc1.propagate_orbit(timestep)
+    sc2.propagate_orbit(timestep)
+    sc3.propagate_orbit(timestep)
     for gps in gps_constellation:
-        gps.propagate_orbit(dt)
+        gps.propagate_orbit(timestep)
         
-    # TODO: UPDATE THE ECEF/ECI STATE OF THE TARGET
+    # Propagate the target's ECI position by performing rotation of the Earth
+    ERR = 7.2921150e-5 # EARTH INERTIAL ROTATION RATE     RAD/SEC
+    ROT = ERR * timestep 
+    
+    # Get the Earth rotation direction cosine matrix, with
+    # small angle approximations for simplicity.
+    ERRMAT = np.array([[  1.0,   ROT, 0.0 ],
+                       [ -1*ROT, 1.0, 0.0 ],
+                       [  0.0,   0.0, 1.0 ]])
+    
+    # pos_tgt = ERRMAT @ pos_tgt
         
     # Build the block diagonal state transition matrix here
     I3 = np.eye(3)
     Z6 = np.zeros((6,6))
     Z36 = np.zeros((3,6))
     Z63 = np.zeros((6,3))
-    A1 = compute_A( dt, norm(x[0:3]) )
-    A2 = compute_A( dt, norm(x[6:9]) )
-    A3 = compute_A( dt, norm(x[12:15]) )
-    A4 = I3 # Earth rotation in ECI
+    A1 = build_filter_A( timestep, norm(x[0:3]) )
+    A2 = build_filter_A( timestep, norm(x[6:9]) )
+    A3 = build_filter_A( timestep, norm(x[12:15]) )
+    A4 = ERRMAT # Earth rotation in ECI
     A = np.block([[A1,  Z6,  Z6,  Z63],
                   [Z6,  A2,  Z6,  Z63],
                   [Z6,  Z6,  A3,  Z63],
-                  [Z36, Z36, Z36, A4 ]])
+                  [Z36, Z36, Z36, I3 ]])
     
     # Propagate the filter with the time update here.
     x = A @ x
     P = A @ P @ np.transpose(A) + Q
+    
+    # Corrupt target state estimate with some noise.
+    x[-3:] = x[-3:] + np.random.normal(0,R,3)
         
     # Check which GPS satellites the SC can currently see. If it can
     # detect and receive range, compute a measurement update.
@@ -460,38 +476,64 @@ for k in range(samples):
             K = P @ CdotT / ((Cdot @ P @ CdotT) + Rdot)
             x = x + (K * (ydot-ycdot))
             P = P - (np.outer(K,Cdot) @ P)
-            
-    # TODO: NEED TO GENERATE ECI TARGET STATE FROM ECEF
     
-    # Generate actual observed TDOA measurements.
-    y_tdoa_21 = norm(pos_sc2 - pos_tgt) - norm(pos_sc1 - pos_tgt) + np.random.normal(0, R)
-    y_tdoa_32 = norm(pos_sc3 - pos_tgt) - norm(pos_sc2 - pos_tgt) + np.random.normal(0, R)
+    # Check if the target is within the elevation mask
+    pos_sc1 = np.array([sc1.px, sc1.py, sc1.pz])
+    aer_tgt = compute_aer(pos_tgt, pos_sc1)
+    elev_tgt = aer1[1]
+    if elev_tgt > elevMask:
     
-    # Get computed TDOA measurements
-    state_rcv1 = x[0:3]
-    state_rcv2 = x[6:9]
-    state_rcv3 = x[12:15]
-    state_tgt = x[18:21]
-    yc_tdoa_21 = norm(state_rcv2 - state_tgt) - norm(state_rcv1 - state_tgt)
-    yc_tdoa_32 = norm(state_rcv3 - state_tgt) - norm(state_rcv2 - state_tgt)
-    
-    # For the actual target, perform TDOA measurement update between SC1 & 2
-    C_tdoa_21 = compute_C_tdoa(state_rcv2, state_rcv1, state_tgt)
-    C_tdoa_21 = np.block([ np.zeros((1,18)), C_tdoa_21 ])[0]
-    C_tdoa_21T = np.transpose(C_tdoa_21)
-    C_tdoa_32 = compute_C_tdoa(state_rcv3, state_rcv2, state_tgt)
-    C_tdoa_32 = np.block([ np.zeros((1,18)), C_tdoa_32 ])[0]
-    C_tdoa_32T = np.transpose(C_tdoa_32)
-    
-    # For the actual target, perform TDOA measurement update between SC1 & 2
-    K = P @ C_tdoa_32T / ((C_tdoa_32 @ P @ C_tdoa_32T) + R)
-    x = x + (K * (y_tdoa_32 - yc_tdoa_32))
-    P = P - (np.outer(K, C_tdoa_32) @ P)
-    
-    # For the actual target, perform TDOA measurement update between SC2 & 3
-    K = P @ C_tdoa_32T / ((C_tdoa_32 @ P @ C_tdoa_32T) + R)
-    x = x + (K * (y_tdoa_32 - yc_tdoa_32))
-    P = P - (np.outer(K, C_tdoa_32) @ P)
+        # Generate actual observed TDOA measurements.
+        y_tdoa_21 = norm(pos_sc2 - pos_tgt) - norm(pos_sc1 - pos_tgt) + np.random.normal(0, R)
+        y_tdoa_32 = norm(pos_sc3 - pos_tgt) - norm(pos_sc2 - pos_tgt) + np.random.normal(0, R)
+        
+        # Get computed TDOA measurements
+        state_rcv1 = x[0:3]
+        state_rcv2 = x[6:9]
+        state_rcv3 = x[12:15]
+        state_tgt = x[18:21]
+        yc_tdoa_21 = norm(state_rcv2 - state_tgt) - norm(state_rcv1 - state_tgt)
+        yc_tdoa_32 = norm(state_rcv3 - state_tgt) - norm(state_rcv2 - state_tgt)
+        
+        # For the actual target, perform TDOA measurement update between SC1 & 2
+        C_tdoa_21 = compute_C_tdoa(state_rcv2, state_rcv1, state_tgt)
+        C_tdoa_21 = np.block([ np.zeros((1,18)), C_tdoa_21 ])[0]
+        C_tdoa_21T = np.transpose(C_tdoa_21)
+        C_tdoa_32 = compute_C_tdoa(state_rcv3, state_rcv2, state_tgt)
+        C_tdoa_32 = np.block([ np.zeros((1,18)), C_tdoa_32 ])[0]
+        C_tdoa_32T = np.transpose(C_tdoa_32)
+        
+        # For the actual target, perform TDOA measurement update between SC1 & 2
+        K = P @ C_tdoa_32T / ((C_tdoa_32 @ P @ C_tdoa_32T) + R)
+        x = x + (K * (y_tdoa_32 - yc_tdoa_32))
+        P = P - (np.outer(K, C_tdoa_32) @ P)
+        
+        # For the actual target, perform TDOA measurement update between SC2 & 3
+        K = P @ C_tdoa_32T / ((C_tdoa_32 @ P @ C_tdoa_32T) + R)
+        x = x + (K * (y_tdoa_32 - yc_tdoa_32))
+        P = P - (np.outer(K, C_tdoa_32) @ P)
+        
+        # Save the prefit residuals
+        res_pre_history[0,k] = y_tdoa_21 - yc_tdoa_21
+        res_pre_history[1,k] = y_tdoa_32 - yc_tdoa_32
+        
+        # Compute and save postfit residuals
+        state_rcv1 = x[0:3]
+        state_rcv2 = x[6:9]
+        state_rcv3 = x[12:15]
+        state_tgt = x[18:21]
+        yc_tdoa_21 = norm(state_rcv2 - state_tgt) - norm(state_rcv1 - state_tgt)
+        yc_tdoa_32 = norm(state_rcv3 - state_tgt) - norm(state_rcv2 - state_tgt)
+        res_pos_history[0,k] = y_tdoa_21 - yc_tdoa_21
+        res_pos_history[1,k] = y_tdoa_32 - yc_tdoa_32
+        
+    else:
+        # Save zero as pre and post fit residuals
+        res_pre_history[0,k] = 0
+        res_pre_history[1,k] = 0
+        res_pos_history[0,k] = 0
+        res_pos_history[1,k] = 0
+        
             
 ##############################################################################
 ##############################################################################
@@ -516,102 +558,126 @@ stdev = np.sqrt(P_history)
 figA, (ax1, ax2, ax3) = plt.subplots(3)
 ax1.plot( timeAxis, xt_history[0,:] - x_history[0,:])
 ax1.fill_between( timeAxis, stdev[0,:], -stdev[0,:], alpha=0.2 )
-ax1.set_ylim(-20*1000*R, 20*1000*R)
+ax1.set_ylim(-10*1000*R, 10*1000*R)
 ax1.grid()
+ax1.set_ylabel('X [m]')
+ax1.set_title("ECI Position Estimates of SC1 [m]")
 ax2.plot( timeAxis, xt_history[1,:] - x_history[1,:])
 ax2.fill_between( timeAxis, stdev[1,:], -stdev[1,:], alpha=0.2 )
-ax2.set_ylim(-20*1000*R, 20*1000*R)
+ax2.set_ylim(-10*1000*R, 10*1000*R)
 ax2.grid()
+ax2.set_ylabel('Y [m]')
 ax3.plot( timeAxis, xt_history[2,:] - x_history[2,:])
 ax3.fill_between( timeAxis, stdev[2,:], -stdev[2,:], alpha=0.2 )
-ax3.set_ylim(-20*1000*R, 20*1000*R)
+ax3.set_ylim(-10*1000*R, 10*1000*R)
 ax3.set_xlabel('Time [seconds]')
 ax3.grid()
+ax3.set_ylabel('Z [m]')
 
 # SC1: Velocity ECI
 
 figB, (ax4, ax5, ax6) = plt.subplots(3)
 ax4.plot( timeAxis, xt_history[3,:] - x_history[3,:])
 ax4.fill_between( timeAxis, stdev[3,:], -stdev[3,:], alpha=0.2 )
-ax4.set_ylim(-20*1000*Rdot, 20*1000*Rdot)
+ax4.set_ylim(-50*1000*Rdot, 50*1000*Rdot)
 ax4.grid()
+ax4.set_ylabel('X [m/s]')
+ax4.set_title("ECI Velocity Estimates of SC1 [m/s]")
 ax5.plot( timeAxis, xt_history[4,:] - x_history[4,:])
 ax5.fill_between( timeAxis, stdev[4,:], -stdev[4,:], alpha=0.2 )
-ax5.set_ylim(-20*1000*Rdot, 20*1000*Rdot)
+ax5.set_ylim(-50*1000*Rdot, 50*1000*Rdot)
 ax5.grid()
+ax5.set_ylabel('Y [m/s]')
 ax6.plot( timeAxis, xt_history[5,:] - x_history[5,:])
 ax6.fill_between( timeAxis, stdev[5,:], -stdev[5,:], alpha=0.2 )
-ax6.set_ylim(-20*1000*Rdot, 20*1000*Rdot)
+ax6.set_ylim(-50*1000*Rdot, 50*1000*Rdot)
 ax6.set_xlabel('Time [seconds]')
 ax6.grid()
+ax6.set_ylabel('Z [m/s]')
 
 # SC2: Position ECI
 
 figC, (ax7, ax8, ax9) = plt.subplots(3)
 ax7.plot( timeAxis, xt_history[6,:] - x_history[6,:])
 ax7.fill_between( timeAxis, stdev[6,:], -stdev[6,:], alpha=0.2 )
-ax7.set_ylim(-20*1000*R, 20*1000*R)
+ax7.set_ylim(-10*1000*R, 10*1000*R)
 ax7.grid()
+ax7.set_ylabel('X [m]')
+ax7.set_title("ECI Position Estimates of SC2 [m]")
 ax8.plot( timeAxis, xt_history[7,:] - x_history[7,:])
 ax8.fill_between( timeAxis, stdev[7,:], -stdev[7,:], alpha=0.2 )
-ax8.set_ylim(-20*1000*R, 20*1000*R)
+ax8.set_ylim(-10*1000*R, 10*1000*R)
 ax8.grid()
+ax8.set_ylabel('Y [m]')
 ax9.plot( timeAxis, xt_history[8,:] - x_history[8,:])
 ax9.fill_between( timeAxis, stdev[8,:], -stdev[8,:], alpha=0.2 )
-ax9.set_ylim(-20*1000*R, 20*1000*R)
+ax9.set_ylim(-10*1000*R, 10*1000*R)
 ax9.set_xlabel('Time [seconds]')
 ax9.grid()
+ax9.set_ylabel('Z [m]')
 
 # SC2: Velocity ECI
 
 figD, (ax10, ax11, ax12) = plt.subplots(3)
 ax10.plot( timeAxis, xt_history[9,:] - x_history[9,:])
 ax10.fill_between( timeAxis, stdev[9,:], -stdev[9,:], alpha=0.2 )
-ax10.set_ylim(-20*1000*Rdot, 20*1000*Rdot)
+ax10.set_ylim(-50*1000*Rdot, 50*1000*Rdot)
 ax10.grid()
+ax10.set_ylabel('X [m/s]')
+ax10.set_title("ECI Velocity Estimates of SC2 [m/s]")
 ax11.plot( timeAxis, xt_history[10,:] - x_history[10,:])
 ax11.fill_between( timeAxis, stdev[10,:], -stdev[10,:], alpha=0.2 )
-ax11.set_ylim(-20*1000*Rdot, 20*1000*Rdot)
+ax11.set_ylim(-50*1000*Rdot, 50*1000*Rdot)
 ax11.grid()
+ax11.set_ylabel('Y [m/s]')
 ax12.plot( timeAxis, xt_history[11,:] - x_history[11,:])
 ax12.fill_between( timeAxis, stdev[11,:], -stdev[11,:], alpha=0.2 )
-ax12.set_ylim(-20*1000*Rdot, 20*1000*Rdot)
+ax12.set_ylim(-50*1000*Rdot, 50*1000*Rdot)
 ax12.set_xlabel('Time [seconds]')
 ax12.grid()
+ax12.set_ylabel('Z [m/s]')
 
 # SC3: Position ECI
 
 figE, (ax13, ax14, ax15) = plt.subplots(3)
 ax13.plot( timeAxis, xt_history[12,:] - x_history[12,:])
 ax13.fill_between( timeAxis, stdev[12,:], -stdev[12,:], alpha=0.2 )
-ax13.set_ylim(-20*1000*R, 20*1000*R)
+ax13.set_ylim(-10*1000*R, 10*1000*R)
 ax13.grid()
+ax13.set_ylabel('X [m]')
+ax13.set_title("ECI Position Estimates of SC3 [m]")
 ax14.plot( timeAxis, xt_history[13,:] - x_history[13,:])
 ax14.fill_between( timeAxis, stdev[13,:], -stdev[13,:], alpha=0.2 )
-ax14.set_ylim(-20*1000*R, 20*1000*R)
+ax14.set_ylim(-10*1000*R, 10*1000*R)
 ax14.grid()
+ax14.set_ylabel('Y [m]')
 ax15.plot( timeAxis, xt_history[14,:] - x_history[14,:])
 ax15.fill_between( timeAxis, stdev[14,:], -stdev[14,:], alpha=0.2 )
-ax15.set_ylim(-20*1000*R, 20*1000*R)
+ax15.set_ylim(-10*1000*R, 10*1000*R)
 ax15.set_xlabel('Time [seconds]')
 ax15.grid()
+ax15.set_ylabel('Z [m]')
 
 # SC3: Velocity ECI
 
 figF, (ax16, ax17, ax18) = plt.subplots(3)
 ax16.plot( timeAxis, xt_history[15,:] - x_history[15,:])
 ax16.fill_between( timeAxis, stdev[15,:], -stdev[15,:], alpha=0.2 )
-ax16.set_ylim(-20*1000*Rdot, 20*1000*Rdot)
+ax16.set_ylim(-50*1000*Rdot, 50*1000*Rdot)
 ax16.grid()
+ax16.set_ylabel('X [m/s]')
+ax16.set_title("ECI Velocity Estimates of SC3 [m/s]")
 ax17.plot( timeAxis, xt_history[16,:] - x_history[16,:])
 ax17.fill_between( timeAxis, stdev[16,:], -stdev[16,:], alpha=0.2 )
-ax17.set_ylim(-20*1000*Rdot, 20*1000*Rdot)
+ax17.set_ylim(-50*1000*Rdot, 50*1000*Rdot)
 ax17.grid()
+ax17.set_ylabel('Y [m/s]')
 ax18.plot( timeAxis, xt_history[17,:] - x_history[17,:])
 ax18.fill_between( timeAxis, stdev[17,:], -stdev[17,:], alpha=0.2 )
-ax18.set_ylim(-20*1000*Rdot, 20*1000*Rdot)
+ax18.set_ylim(-50*1000*Rdot, 50*1000*Rdot)
 ax18.set_xlabel('Time [seconds]')
 ax18.grid()
+ax18.set_ylabel('Z [m/s]')
 
 # Target: ECI
 
@@ -620,12 +686,31 @@ ax19.plot( timeAxis, xt_history[18,:] - x_history[18,:])
 ax19.fill_between( timeAxis, stdev[18,:], -stdev[18,:], alpha=0.2 )
 ax19.set_ylim(-200*1000*R, 200*1000*R)
 ax19.grid()
+ax19.set_ylabel('X [m]')
+ax19.set_title("ECI Position Estimates of Emitter [m]")
 ax20.plot( timeAxis, xt_history[19,:] - x_history[19,:])
 ax20.fill_between( timeAxis, stdev[19,:], -stdev[19,:], alpha=0.2 )
 ax20.set_ylim(-200*1000*R, 200*1000*R)
 ax20.grid()
+ax20.set_ylabel('Y [m]')
 ax21.plot( timeAxis, xt_history[20,:] - x_history[20,:])
 ax21.fill_between( timeAxis, stdev[20,:], -stdev[20,:], alpha=0.2 )
 ax21.set_ylim(-200*1000*R, 200*1000*R)
 ax21.set_xlabel('Time [seconds]')
 ax21.grid()
+ax21.set_ylabel('Z [m]')
+
+# Pre and post fit residuals of TDOA
+
+figH, (ax22, ax23) = plt.subplots(2)
+ax22.scatter( timeAxis, res_pre_history[0,:], 8, alpha=0.35)
+ax22.scatter( timeAxis, res_pos_history[0,:], 8, alpha=0.35)
+ax22.grid()
+ax22.set_ylabel('Localization Residual [m]')
+ax22.set_title("Pre/Post-fit residuals for TDOA Between SC1/2")
+ax23.scatter( timeAxis, res_pre_history[1,:], 8, alpha=0.35)
+ax23.scatter( timeAxis, res_pos_history[1,:], 8, alpha=0.35)
+ax23.grid()
+ax23.set_ylabel('Localization Residual [m]')
+ax23.set_xlabel('Time [seconds]')
+ax23.set_title("Pre/Post-fit residuals for TDOA Between SC2/3")
